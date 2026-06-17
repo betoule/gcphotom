@@ -30,16 +30,25 @@ pip install -e ".[dev]"
 
 ```python
 import numpy as np
-from astropy.io import fits
 import gcphotom as gcp
 
-# Simulate an astronomical image with thousands stars
+# 1. Simulate a realistic astronomical image with ~1000 stars
+catalog = gcp.make_source_catalog(1000, shape=(1024, 1024), seed=42)
+image = gcp.simulate_image(
+    (1024, 1024), catalog, alpha=2.5, beta=3.0,
+    background=500, read_noise=5, seed=42
+)
 
-# Perform aperture photometry of all detected objects with Photutils
+# 2. Extract growth curves for each source
+radii = np.arange(1, 30, 0.5)
+positions = np.column_stack([catalog["x"], catalog["y"]])
+error = gcp.estimate_error(image, background=500, read_noise=5)
+result = gcp.extract_growth_curves(image - 500, positions, radii, error=error)
 
-# Fit all resulting growth curves with a common learned Moffat profile and local background estimation
+# 3. Fit all growth curves with a common Moffat profile
+# (Fitter class — coming soon)
 
-# Compare the resulting flux estimate to ground truth and aperture fluxes
+# 4. Compare fitted fluxes to injected ground truth
 ```
 
 # Why gcphotom?
