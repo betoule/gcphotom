@@ -1,0 +1,58 @@
+[project]
+name = "gcphotom"
+version = "0.1.0"
+description = "Differentiable Growth Curve Photometry with Profile Fitting"
+readme = "README.md"
+license = {text = "GPL-3.0"}
+requires-python = ">=3.10"
+authors = [
+    {name = "gcphotom contributors"},
+]
+dependencies = [
+    "jax>=0.4.0",
+    "jaxlib>=0.4.0",
+    "astropy>=6.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=24.0",
+    "pylint>=3.0",
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "pre-commit>=3.5",
+    "matplotlib>=3.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gcphotom"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.pylint.messages_control]
+disable = [
+    "missing-docstring",
+    "invalid-name",
+    "too-few-public-methods",
+    "line-too-long",
+]
+
+[tool.pylint.format]
+max-line-length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["gcphotom"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
