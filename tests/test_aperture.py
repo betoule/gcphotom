@@ -3,7 +3,7 @@ import pytest
 from gcphotom.aperture import (
     estimate_error,
     extract_growth_curves,
-    extract_single_growth_curve,
+    _extract_single_growth_curve,
 )
 from gcphotom.simulator import make_source_catalog, simulate_image
 
@@ -49,7 +49,7 @@ class TestExtractSingleGrowthCurve:
     def test_output_shapes(self, simple_image):
         img, cat = simple_image
         radii = np.arange(1, 20, 0.5)
-        radius, profile, perr = extract_single_growth_curve(
+        radius, profile, perr = _extract_single_growth_curve(
             img, (cat["x"][0], cat["y"][0]), radii
         )
         assert len(radius) == len(radii)
@@ -59,7 +59,7 @@ class TestExtractSingleGrowthCurve:
     def test_monotonic_increase(self, simple_image):
         img, cat = simple_image
         radii = np.arange(1, 15, 0.5)
-        _, profile, _ = extract_single_growth_curve(
+        _, profile, _ = _extract_single_growth_curve(
             img, (cat["x"][0], cat["y"][0]), radii
         )
         increasing = np.diff(profile) > 0
@@ -68,7 +68,7 @@ class TestExtractSingleGrowthCurve:
     def test_flux_recovery(self, simple_image):
         img, cat = simple_image
         radii = np.arange(1, 30, 0.5)
-        _, profile, _ = extract_single_growth_curve(
+        _, profile, _ = _extract_single_growth_curve(
             img, (cat["x"][0], cat["y"][0]), radii
         )
         ratio = profile[-1] / cat["flux"][0]
@@ -78,7 +78,7 @@ class TestExtractSingleGrowthCurve:
         img, cat = simple_image
         radii = np.arange(1, 20, 0.5)
         error = np.ones_like(img) * 2
-        _, _, perr = extract_single_growth_curve(
+        _, _, perr = _extract_single_growth_curve(
             img, (cat["x"][0], cat["y"][0]), radii, error=error
         )
         assert np.all(perr > 0)
@@ -114,3 +114,16 @@ class TestExtractGrowthCurves:
         error = estimate_error(img, 100, 3)
         result = extract_growth_curves(img - 100, positions, radii, error=error)
         assert np.all(result["flux_err"] > 0)
+
+    def test_default_radii(self):
+        shape = (128, 128)
+        cat = make_source_catalog(1, shape=shape, seed=42)
+        cat["x"][0] = 64
+        cat["y"][0] = 64
+        img, _ = simulate_image(shape, cat, alpha=2.5, beta=3.0, background=0, seed=42)
+        positions = np.column_stack([cat["x"], cat["y"]])
+        result = extract_growth_curves(img, positions)
+
+        assert len(result["radius"]) > 2
+        assert result["radius"][0] == pytest.approx(0.5)
+        assert result["radius"][-1] == pytest.approx(30)

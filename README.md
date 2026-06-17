@@ -36,10 +36,8 @@ import gcphotom as gcp
 image, catalog = gcp.simulate_image()
 
 # 2. Extract growth curves for each source
-radii = np.arange(1, 30, 0.5)
 positions = np.column_stack([catalog["x"], catalog["y"]])
-error = gcp.estimate_error(image, background=500, read_noise=5)
-result = gcp.extract_growth_curves(image - 500, positions, radii, error=error)
+result = gcp.extract_growth_curves(image, positions)
 
 # 3. Fit all growth curves with a common Moffat profile
 # (Fitter class — coming soon)

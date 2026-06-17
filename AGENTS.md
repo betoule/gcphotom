@@ -58,9 +58,16 @@ After each substantial milestone:
 
 Stop building.
 Commit making sure all tests passes and linting is happy.
-Provide a quick summary, with a snippet of code demonstrating the usage of what was just developed.
-Provide a short critical evaluation of what has been done.
+Devise a minimalist working and self sufficient snippet of code demonstrating the usage of what was just developed.
+Provide it along with a quick summary and a short critical evaluation of the changes.
 Wait for feedback.
 Once feedback is provided, work on implementing fixes and suggestions.
 Do not jump to the next task until instructed to do so.
 
+4. Keep the README consistent
+The README.md is our main entry point to the code documentation.
+
+Read it at the beginning of all session.
+Check for consistency with the codebase.
+Check that the provided examples are functional.
+Update it if necessary after an API change or a feature development.

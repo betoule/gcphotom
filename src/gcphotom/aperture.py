@@ -23,7 +23,7 @@ def estimate_error(image, background, read_noise):
     return np.sqrt(signal + read_noise**2)
 
 
-def extract_single_growth_curve(image, position, radii, error=None):
+def _extract_single_growth_curve(image, position, radii, error=None):
     """Extract a circular growth curve for a single source.
 
     Parameters
@@ -53,7 +53,7 @@ def extract_single_growth_curve(image, position, radii, error=None):
     return cog.radius, cog.profile, perr
 
 
-def extract_growth_curves(image, positions, radii, error=None):
+def extract_growth_curves(image, positions, radii=None, error=None):
     """Extract circular growth curves for multiple sources.
 
     Parameters
@@ -62,8 +62,9 @@ def extract_growth_curves(image, positions, radii, error=None):
         Image data (should be background-subtracted).
     positions : 2D `~numpy.ndarray`
         ``(n_sources, 2)`` array of ``(x, y)`` coordinates.
-    radii : 1D `~numpy.ndarray`
-        Aperture radii in pixels.
+    radii : 1D `~numpy.ndarray` or None
+        Aperture radii in pixels. Defaults to 10 logarithmically spaced
+        values between 0.5 and 30 pixels.
     error : 2D `~numpy.ndarray` or None
         Per-pixel 1-sigma error.
 
@@ -77,13 +78,16 @@ def extract_growth_curves(image, positions, radii, error=None):
         * ``flux_err``: 2D array ``(n_sources, n_radii)`` of flux
           uncertainties.
     """
+    if radii is None:
+        radii = np.logspace(np.log10(0.5), np.log10(30), num=10)
+
     n_sources = len(positions)
     n_radii = len(radii)
     flux = np.zeros((n_sources, n_radii))
     flux_err = np.zeros((n_sources, n_radii))
 
     for i, pos in enumerate(positions):
-        _, profile, profile_err = extract_single_growth_curve(
+        _, profile, profile_err = _extract_single_growth_curve(
             image, pos, radii, error=error
         )
         flux[i] = profile
