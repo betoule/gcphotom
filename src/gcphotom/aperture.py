@@ -79,7 +79,7 @@ def extract_growth_curves(image, positions, radii=None, error=None):
           uncertainties.
     """
     if radii is None:
-        radii = np.logspace(np.log10(0.5), np.log10(30), num=10)
+        radii = np.logspace(np.log10(3), np.log10(30), num=10)
 
     n_sources = len(positions)
     n_radii = len(radii)

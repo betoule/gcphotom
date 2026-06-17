@@ -42,6 +42,7 @@ def make_source_catalog(n_sources=1000, shape=(1024, 1024), margin=20, seed=None
 def simulate_image(
     shape=(1024, 1024),
     catalog=None,
+    n_sources=1000,
     alpha=3,
     beta=3,
     background=100,
@@ -57,6 +58,9 @@ def simulate_image(
     catalog : `~astropy.table.Table` or None
         Source catalog with columns ``x``, ``y``, ``flux``.
         If ``None``, a catalog is generated via ``make_source_catalog``.
+    n_sources : int
+        Number of sources when ``catalog`` is ``None``. Ignored if
+        ``catalog`` is provided.
     alpha : float
         Moffat scale parameter in pixels.
     beta : float
@@ -76,7 +80,7 @@ def simulate_image(
         Source catalog with injected truth values.
     """
     if catalog is None:
-        catalog = make_source_catalog(shape=shape, seed=seed)
+        catalog = make_source_catalog(n_sources=n_sources, shape=shape, seed=seed)
 
     psf = Moffat2D(amplitude=1, gamma=alpha, alpha=beta, x_0=0, y_0=0)
 
