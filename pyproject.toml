@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Differentiable Growth Curve Photometry with Profile Fitting"
 readme = "README.md"
 license = {text = "GPL-3.0"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     {name = "Marc Betoule", email = "marc.betoule@lpnhe.in2p3.fr"},
 ]
@@ -36,7 +36,7 @@ packages = ["src/gcphotom"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310"]
+target-version = ["py311"]
 
 [tool.pylint.messages_control]
 disable = [
