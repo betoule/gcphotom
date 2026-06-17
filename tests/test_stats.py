@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from gcphotom.stats import mad, robust_average, get_bin_indices, bin_statistic
 

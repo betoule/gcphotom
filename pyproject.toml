@@ -48,6 +48,11 @@ disable = [
     "too-many-locals",
     "redefined-outer-name",
     "unused-variable",
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "import-outside-toplevel",
+    "unnecessary-lambda-assignment",
+    "wrong-import-position",
 ]
 
 [tool.pylint.format]

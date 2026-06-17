@@ -3,6 +3,11 @@
 import numpy as np
 import pytest
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 import gcphotom as gcp
 
 
@@ -160,11 +165,6 @@ class TestFitterHelpers:
         assert goods_after <= goods_before
 
     def test_plot_psf_returns_axes(self, small_sim):
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
         gc = gcp.extract_growth_curves(img, positions)
