@@ -20,6 +20,12 @@
 ## Testing
 - Tests use **pytest** and must maintain high coverage.
   - Run: `uv run pytest --cov=gcphotom --cov-report=term-missing --cov-fail-under=95`
+- **Test quality**:
+  - Test behavior, not defaults — never assert a hardcoded default value (e.g. `len(cat) == 1000`).
+  - No tautologies — don't assert what was just passed in (e.g. `assert returned_cat is cat`).
+  - No redundant composites — a test that only combines assertions already covered elsewhere adds nothing.
+  - Assert observable outcomes, not internal structure — avoid checking exact dict keys, internal array shapes, or implementation details.
+  - One concept per test — if two tests share the same setup and assertion pattern, merge them.
 
 ## Project Structure
 - Source code lives under `src/gcphotom/` (src layout).
