@@ -15,7 +15,7 @@ def simple_image():
     cat["x"][0] = 64
     cat["y"][0] = 64
     img, returned_cat = simulate_image(
-        shape, cat, alpha=2.5, beta=3.0, background=0, seed=42
+        shape, cat, gamma=2.5, alpha=3.0, background=0, seed=42
     )
     return img, returned_cat
 
@@ -91,7 +91,7 @@ class TestExtractGrowthCurves:
         for i in range(len(cat)):
             cat["x"][i] = 50 + i * 40
             cat["y"][i] = 128
-        img, _ = simulate_image(shape, cat, alpha=2.5, beta=3.0, background=0, seed=42)
+        img, _ = simulate_image(shape, cat, gamma=2.5, alpha=3.0, background=0, seed=42)
         positions = np.column_stack([cat["x"], cat["y"]])
         radii = np.arange(1, 20, 0.5)
         result = extract_growth_curves(img, positions, radii)
@@ -107,7 +107,7 @@ class TestExtractGrowthCurves:
             cat["x"][i] = 80 + i * 50
             cat["y"][i] = 128
         img, _ = simulate_image(
-            shape, cat, alpha=2.5, beta=3.0, background=100, seed=42
+            shape, cat, gamma=2.5, alpha=3.0, background=100, seed=42
         )
         positions = np.column_stack([cat["x"], cat["y"]])
         radii = np.arange(1, 20, 0.5)
@@ -120,7 +120,7 @@ class TestExtractGrowthCurves:
         cat = make_source_catalog(1, shape=shape, seed=42)
         cat["x"][0] = 64
         cat["y"][0] = 64
-        img, _ = simulate_image(shape, cat, alpha=2.5, beta=3.0, background=0, seed=42)
+        img, _ = simulate_image(shape, cat, gamma=2.5, alpha=3.0, background=0, seed=42)
         positions = np.column_stack([cat["x"], cat["y"]])
         result = extract_growth_curves(img, positions)
 

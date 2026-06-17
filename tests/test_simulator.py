@@ -35,12 +35,12 @@ class TestMakeSourceCatalog:
 class TestSimulateImage:
     def test_image_shape(self):
         cat = make_source_catalog(10, shape=(128, 128), seed=42)
-        img, _ = simulate_image((128, 128), cat, alpha=2.5, beta=3.0, seed=42)
+        img, _ = simulate_image((128, 128), cat, gamma=2.5, alpha=3.0, seed=42)
         assert img.shape == (128, 128)
 
     def test_returns_catalog(self):
         cat = make_source_catalog(10, shape=(128, 128), seed=42)
-        _, returned_cat = simulate_image((128, 128), cat, alpha=2.5, beta=3.0, seed=42)
+        _, returned_cat = simulate_image((128, 128), cat, gamma=2.5, alpha=3.0, seed=42)
         assert returned_cat is cat
 
     def test_auto_generate_catalog(self):
@@ -50,7 +50,7 @@ class TestSimulateImage:
 
     def test_no_nan(self):
         cat = make_source_catalog(10, shape=(128, 128), seed=42)
-        img, _ = simulate_image((128, 128), cat, alpha=2.5, beta=3.0, seed=42)
+        img, _ = simulate_image((128, 128), cat, gamma=2.5, alpha=3.0, seed=42)
         assert np.all(np.isfinite(img))
 
     def test_background_level(self):
@@ -58,7 +58,7 @@ class TestSimulateImage:
         cat["x"][0] = 128
         cat["y"][0] = 128
         img, _ = simulate_image(
-            (256, 256), cat, alpha=2.5, beta=3.0, background=500, seed=42
+            (256, 256), cat, gamma=2.5, alpha=3.0, background=500, seed=42
         )
         edge_mask = np.ones((256, 256), dtype=bool)
         edge_mask[50:206, 50:206] = False
@@ -72,8 +72,8 @@ class TestSimulateImage:
         img, _ = simulate_image(
             (256, 256),
             cat,
-            alpha=2.5,
-            beta=3.0,
+            gamma=2.5,
+            alpha=3.0,
             background=100,
             read_noise=5,
             seed=42,
@@ -85,13 +85,13 @@ class TestSimulateImage:
         assert np.abs(np.std(bg_region) - expected_std) < 10
 
     def test_flux_conservation(self):
-        alpha, beta = 2.5, 3.0
+        gamma, alpha = 2.5, 3.0
         cat = make_source_catalog(5, shape=(512, 512), seed=42)
         for i in range(len(cat)):
             cat["x"][i] = 100 + i * 80
             cat["y"][i] = 256
         img, _ = simulate_image(
-            (512, 512), cat, alpha=alpha, beta=beta, background=0, seed=42
+            (512, 512), cat, gamma=gamma, alpha=alpha, background=0, seed=42
         )
         total_injected = cat["flux"].sum()
         total_image = img.sum()
@@ -103,8 +103,8 @@ class TestSimulateImage:
         img, _ = simulate_image(
             (256, 256),
             cat,
-            alpha=2.5,
-            beta=3.0,
+            gamma=2.5,
+            alpha=3.0,
             background=200,
             read_noise=5,
             seed=42,

@@ -42,7 +42,7 @@ best_params, extra = fitter.fit()
 
 # 4. Extract fitted fluxes and profile parameters
 fitted = fitter.results(best_params)
-print(f"PSF: alpha={fitted['alpha']:.2f}, beta={fitted['beta']:.2f}")
+print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
 print(f"Fitted fluxes: {fitted['flux'][:5]}")
 ```
 

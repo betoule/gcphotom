@@ -8,9 +8,14 @@ import numpy as np
 from . import jaxfitter
 
 
-def fwhm2alpha(fwhm, beta):
-    """Convert FWHM to Moffat alpha parameter."""
-    return fwhm / (2.0 * jnp.sqrt(2.0 ** (1.0 / beta) - 1.0))
+def fwhm2gamma(fwhm, alpha):
+    """Convert FWHM to Moffat gamma parameter."""
+    return fwhm / (2.0 * jnp.sqrt(2.0 ** (1.0 / alpha) - 1.0))
+
+
+def gamma2fwhm(gamma, alpha):
+    """Convert Moffat gamma parameter to FWHM."""
+    return 2.0 * gamma * jnp.sqrt(2.0 ** (1.0 / alpha) - 1.0)
 
 
 def sigma2fwhm(sigma):
@@ -23,19 +28,19 @@ def fwhm2sigma(fwhm):
     return fwhm / jnp.sqrt(8 * jnp.log(2))
 
 
-def moffat(r2, alpha, beta):
+def moffat(r2, gamma, alpha):
     """Moffat profile value at squared radius r2."""
-    return (beta - 1) / (jnp.pi * alpha**2) * (1 + r2 / alpha**2) ** (-beta)
+    return (alpha - 1) / (jnp.pi * gamma**2) * (1 + r2 / gamma**2) ** (-alpha)
 
 
-def moffat_flux(R, alpha, beta):
+def moffat_flux(R, gamma, alpha):
     """Integrated Moffat flux up to radius R (normalized to 1 at infinity)."""
-    return 1 - (1 + R**2 / alpha**2) ** (1 - beta)
+    return 1 - (1 + R**2 / gamma**2) ** (1 - alpha)
 
 
-def imoffat(x, alpha, beta):
+def imoffat(x, gamma, alpha):
     """Inverse Moffat: radius at which cumulative flux fraction equals x."""
-    return jnp.sqrt((x * jnp.pi * alpha**2 / (beta - 1)) ** (-1 / beta) - 1) * alpha
+    return jnp.sqrt((x * jnp.pi * gamma**2 / (alpha - 1)) ** (-1 / alpha) - 1) * gamma
 
 
 def flux_and_couronnes(x):
@@ -49,7 +54,7 @@ def moffat_model(params, radii):
     Parameters
     ----------
     params : dict
-        Keys: ``flux``, ``alpha``, ``beta``, ``back``.
+        Keys: ``flux``, ``gamma``, ``alpha``, ``back``.
     radii : array_like
         Aperture radii.
 
@@ -59,11 +64,11 @@ def moffat_model(params, radii):
         Cumulative model flux at each radius.
     """
     flux = params["flux"]
+    gamma = params["gamma"]
     alpha = params["alpha"]
-    beta = params["beta"]
     back = params["back"]
     return (
-        flux[None, :] * moffat_flux(radii[:, None], alpha, beta)
+        flux[None, :] * moffat_flux(radii[:, None], gamma, alpha)
         + back[None, :] * radii[:, None] ** 2 * jnp.pi
     )
 
@@ -170,10 +175,10 @@ class Fitter:
             plt.plot(extra["loss"])
         return bf, extra
 
-    def initial_guess(self, beta=4.0):
+    def initial_guess(self, alpha=3.0):
         """Heuristic initial parameter guess.
 
-        Estimates total flux from inner aperture scaling, and alpha from
+        Estimates total flux from inner aperture scaling, and gamma from
         the 50%-flux radius of each growth curve.
         """
         n_radii = self.fluxes.shape[0]
@@ -185,17 +190,17 @@ class Fitter:
         estimate = f_inner * ac
         self.estimate = estimate
 
-        alpha_est = self._estimate_alpha(estimate * ac, beta)
+        gamma_est = 3.0  # self._estimate_gamma(estimate * ac, alpha)
 
         return {
-            "alpha": alpha_est,
-            "beta": beta,
+            "gamma": gamma_est,
+            "alpha": alpha,
             "flux": jnp.ones(self.fluxes.shape[1]),
             "back": jnp.zeros(self.fluxes.shape[1]),
         }
 
-    def _estimate_alpha(self, total_flux, beta):
-        """Estimate alpha from the 50%-flux radius of each source."""
+    def _estimate_gamma(self, total_flux, alpha):
+        """Estimate gamma from the 50%-flux radius of each source."""
         cum_flux = self.fluxes.sum(axis=0)
         half_flux = total_flux * 0.5
         median_radii = []
@@ -225,7 +230,7 @@ class Fitter:
         if len(median_r) == 0:
             median_r = jnp.array([2.0])
 
-        return float(fwhm2alpha(sigma2fwhm(jnp.median(median_r)), beta))
+        return float(fwhm2gamma(sigma2fwhm(jnp.median(median_r)), alpha))
 
     def plot_PSF(self, bf, axes=None):
         """Plot the median PSF and residuals.
@@ -284,7 +289,7 @@ class Fitter:
 
         Returns
         -------
-        dict with keys ``flux``, ``back``, ``alpha``, ``beta``, ``ngoods``, ``chi2``.
+        dict with keys ``flux``, ``back``, ``gamma``, ``alpha``, ``ngoods``, ``chi2``.
         """
         par = self._flux(bf)
         ngoods = self.goods.sum(axis=0)
@@ -293,8 +298,8 @@ class Fitter:
         return {
             "flux": np.array(par["flux"]),
             "back": np.array(par["back"]),
+            "gamma": float(bf["gamma"]),
             "alpha": float(bf["alpha"]),
-            "beta": float(bf["beta"]),
             "ngoods": np.array(ngoods),
             "chi2": np.array(chi2),
         }

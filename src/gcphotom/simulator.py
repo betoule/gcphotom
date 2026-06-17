@@ -43,8 +43,8 @@ def simulate_image(
     shape=(1024, 1024),
     catalog=None,
     n_sources=1000,
+    gamma=3,
     alpha=3,
-    beta=3,
     background=100,
     read_noise=5,
     seed=None,
@@ -61,9 +61,9 @@ def simulate_image(
     n_sources : int
         Number of sources when ``catalog`` is ``None``. Ignored if
         ``catalog`` is provided.
-    alpha : float
+    gamma : float
         Moffat scale parameter in pixels.
-    beta : float
+    alpha : float
         Moffat shape parameter.
     background : float
         Constant background level in ADU.
@@ -82,16 +82,16 @@ def simulate_image(
     if catalog is None:
         catalog = make_source_catalog(n_sources=n_sources, shape=shape, seed=seed)
 
-    psf = Moffat2D(amplitude=1, gamma=alpha, alpha=beta, x_0=0, y_0=0)
+    psf = Moffat2D(amplitude=1, gamma=gamma, alpha=alpha, x_0=0, y_0=0)
 
     params = Table()
-    params["amplitude"] = catalog["flux"] * (beta - 1) / (alpha**2 * np.pi)
+    params["amplitude"] = catalog["flux"] * (alpha - 1) / (gamma**2 * np.pi)
     params["x_0"] = catalog["x"]
     params["y_0"] = catalog["y"]
-    params["gamma"] = alpha
-    params["alpha"] = beta
+    params["gamma"] = gamma
+    params["alpha"] = alpha
 
-    model_shape = max(21, int(6 * alpha))
+    model_shape = max(21, int(6 * gamma))
     image = make_model_image(
         shape,
         psf,
