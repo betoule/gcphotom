@@ -4,7 +4,7 @@ from astropy.table import Table
 from photutils.datasets import apply_poisson_noise, make_model_image
 
 
-def make_source_catalog(n_sources, shape=(1024, 1024), margin=20, min_sep=5, seed=None):
+def make_source_catalog(n_sources=1000, shape=(1024, 1024), margin=20, seed=None):
     """Generate a realistic source catalog.
 
     Parameters
@@ -15,8 +15,6 @@ def make_source_catalog(n_sources, shape=(1024, 1024), margin=20, min_sep=5, see
         Image shape (ny, nx).
     margin : int
         Pixel margin from image edge.
-    min_sep : int
-        Minimum separation between sources in pixels.
     seed : int or None
         Random seed.
 
@@ -27,71 +25,27 @@ def make_source_catalog(n_sources, shape=(1024, 1024), margin=20, min_sep=5, see
     """
     rng = np.random.default_rng(seed)
 
-    lo_x, hi_x = margin, shape[1] - margin
-    lo_y, hi_y = margin, shape[0] - margin
-
-    xs, ys = [], []
-    placed = 0
-    attempts = 0
-    max_attempts = n_sources * 20
-
-    while placed < n_sources and attempts < max_attempts:
-        attempts += 1
-        x = rng.uniform(lo_x, hi_x)
-        y = rng.uniform(lo_y, hi_y)
-
-        if placed == 0:
-            xs.append(x)
-            ys.append(y)
-            placed += 1
-            continue
-
-        dx = np.array(xs) - x
-        dy = np.array(ys) - y
-        dist = np.sqrt(dx**2 + dy**2)
-
-        if dist.min() >= min_sep:
-            xs.append(x)
-            ys.append(y)
-            placed += 1
+    xs = rng.uniform(margin, shape[1] - margin, n_sources)
+    ys = rng.uniform(margin, shape[0] - margin, n_sources)
 
     catalog = Table()
     catalog["x"] = xs
     catalog["y"] = ys
 
     log_fmin, log_fmax = np.log10(100), np.log10(1e6)
-    log_flux = rng.uniform(log_fmin, log_fmax, len(catalog))
+    log_flux = rng.uniform(log_fmin, log_fmax, n_sources)
     catalog["flux"] = 10**log_flux
 
     return catalog
 
 
-def make_moffat_psf(alpha, beta):
-    """Build a Moffat2D model with the given shape parameters.
-
-    Parameters
-    ----------
-    alpha : float
-        Moffat scale parameter (gamma) in pixels.
-    beta : float
-        Moffat shape parameter.
-
-    Returns
-    -------
-    model : `~astropy.modeling.models.Moffat2D`
-        Moffat model with amplitude=1, gamma=alpha, beta=beta,
-        centered at (0, 0).
-    """
-    return Moffat2D(amplitude=1, gamma=alpha, alpha=beta, x_0=0, y_0=0)
-
-
 def simulate_image(
-    shape,
-    catalog,
-    alpha,
-    beta,
-    background=0.0,
-    read_noise=0.0,
+    shape=(1024, 1024),
+    catalog=None,
+    alpha=3,
+    beta=3,
+    background=100,
+    read_noise=5,
     seed=None,
 ):
     """Simulate a 2D image with Moffat PSF sources and noise.
@@ -100,8 +54,9 @@ def simulate_image(
     ----------
     shape : tuple of int
         Image shape (ny, nx).
-    catalog : `~astropy.table.Table`
+    catalog : `~astropy.table.Table` or None
         Source catalog with columns ``x``, ``y``, ``flux``.
+        If ``None``, a catalog is generated via ``make_source_catalog``.
     alpha : float
         Moffat scale parameter in pixels.
     beta : float
@@ -117,13 +72,16 @@ def simulate_image(
     -------
     image : 2D `~numpy.ndarray`
         Simulated image.
+    catalog : `~astropy.table.Table`
+        Source catalog with injected truth values.
     """
-    psf = make_moffat_psf(alpha, beta)
+    if catalog is None:
+        catalog = make_source_catalog(shape=shape, seed=seed)
+
+    psf = Moffat2D(amplitude=1, gamma=alpha, alpha=beta, x_0=0, y_0=0)
 
     params = Table()
-    total_flux = catalog["flux"]
-    amplitude = total_flux * (beta - 1) / (alpha**2 * np.pi)
-    params["amplitude"] = amplitude
+    params["amplitude"] = catalog["flux"] * (beta - 1) / (alpha**2 * np.pi)
     params["x_0"] = catalog["x"]
     params["y_0"] = catalog["y"]
     params["gamma"] = alpha
@@ -140,12 +98,10 @@ def simulate_image(
     )
 
     image = image + background
-
-    if np.any(image >= 0):
-        image = apply_poisson_noise(image, seed=seed)
+    image = apply_poisson_noise(image, seed=seed)
 
     if read_noise > 0:
         rng = np.random.default_rng(seed)
         image = image + rng.normal(0, read_noise, shape)
 
-    return image
+    return image, catalog

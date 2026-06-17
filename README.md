@@ -33,11 +33,7 @@ import numpy as np
 import gcphotom as gcp
 
 # 1. Simulate a realistic astronomical image with ~1000 stars
-catalog = gcp.make_source_catalog(1000, shape=(1024, 1024), seed=42)
-image = gcp.simulate_image(
-    (1024, 1024), catalog, alpha=2.5, beta=3.0,
-    background=500, read_noise=5, seed=42
-)
+image, catalog = gcp.simulate_image()
 
 # 2. Extract growth curves for each source
 radii = np.arange(1, 30, 0.5)

@@ -53,6 +53,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 source = ["gcphotom"]
+omit = ["*gcmodel*"]
 
 [tool.coverage.report]
 fail_under = 95
