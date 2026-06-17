@@ -1,132 +1,115 @@
-def make_index(index):
-    s = np.argsort(index)
-    n = np.bincount(index.astype("int"))
-    n = n[n != 0]
-    l = []
-    p = 0
-    for i in n:
-        l.append(s[p : p + i])
-        p = p + i
-    return l
+import numpy as np
+import matplotlib.pyplot as plt
+
+from gcphotom.stats import bin_statistic
 
 
 def binplot(
     x,
     y,
     nbins=10,
-    robust=False,
-    data=True,
-    scale=True,
     bins=None,
+    *,
     weights=None,
+    method="mean",
+    sigma_clip=5.0,
+    scale_err=True,
+    data=True,
+    dotkeys=None,
     ls="none",
-    dotkeys={"color": "k"},
     xerr=True,
     ax=None,
+    noplot=False,
     **keys,
 ):
-    """Bin the y data into n bins of x and plot the average and
-    dispersion of each bins.
+    """Bin the y data into bins of x and plot the average and dispersion.
 
-    Arguments:
+    Parameters
     ----------
-    nbins: int
-      Number of bins
+    x : array_like
+        Bin variable.
+    y : array_like
+        Value variable.
+    nbins : int
+        Number of bins (ignored if *bins* is provided).
+    bins : array_like or None
+        Explicit bin edges.
+    weights : array_like or None
+        Per-point weights (1/sigma**2 for optimal Gaussian weighting).
+    method : {"mean", "median", "sigma_clip"}
+        Statistic to compute per bin.
+    sigma_clip : float
+        Clip factor for ``method="sigma_clip"``.
+    scale_err : bool
+        If True, divide error by sqrt(N) (error on the mean).
+    data : bool
+        If True, overlay raw data points on the plot.
+    dotkeys : dict or None
+        Keyword arguments passed to ``ax.plot`` for data points.
+    ls : str
+        Linestyle for the binned errorbar line.
+    xerr : bool or array_like
+        If True, compute x-error from bin edges.
+    ax : matplotlib.axes.Axes or None
+        Target axes. Uses ``plt.gca()`` if None.
+    noplot : bool
+        If True, skip plotting and return binned values only.
+    **keys
+        Additional keyword arguments passed to ``ax.errorbar``.
 
-    robust: bool
-      If True, use median and nmad as estimators of the bin average
-      and bin dispersion.
-
-    data: bool
-      If True, add data points on the plot
-
-    scale: bool
-      Whether the error bars should present the error on the mean or
-      the dispersion in the bin
-
-    bins: list
-      The bin definition
-
-    weights: array(len(x))
-      If not None, use weights in the computation of the mean.
-      Provide 1/sigma**2 for optimal weighting with Gaussian noise
-
-    dotkeys: dict
-      To keys to pass to plot when drawing data points
-
-    ax: matplotlib axes instance. If None plot to the current axes
-
-    **keys:
-      The keys to pass to plot when drawing bins
-
-    Exemples:
-    ---------
-    >>> x = np.arange(1000); y = np.random.rand(1000);
-    >>> binplot(x,y)
+    Returns
+    -------
+    xbinned : ndarray
+        Bin centers.
+    yplot : ndarray
+        Per-bin statistic.
+    yerr : ndarray
+        Per-bin error estimate.
     """
-    ind = ~np.isnan(x) & ~np.isnan(y)
-    x = x[ind]
-    y = y[ind]
-    if weights is not None:
-        weights = weights[ind]
+    if dotkeys is None:
+        dotkeys = {"color": "k"}
+
+    # Filter NaN for bin construction
+    x_arr = np.asarray(x)
+    y_arr = np.asarray(y)
+    valid = ~np.isnan(x_arr) & ~np.isnan(y_arr)
+
+    # Build bin edges if not provided
     if bins is None:
-        bins = np.linspace(x.min(), x.max() + abs(x.max() * 1e-7), nbins + 1)
-    ind = (x < bins.max()) & (x >= bins.min())
-    x = x[ind]
-    y = y[ind]
-    if weights is not None:
-        weights = weights[ind]
-    yd = np.digitize(x, bins)
-    index = make_index(yd)
-    ybinned = [y[e] for e in index]
-    xbinned = 0.5 * (bins[:-1] + bins[1:])
-    usedbins = np.array(np.sort(list(set(yd)))) - 1
-    xbinned = xbinned[usedbins]
-    bins = bins[usedbins + 1]
+        bins = np.linspace(
+            x_arr[valid].min(),
+            x_arr[valid].max() + abs(x_arr[valid].max()) * 1e-7,
+            nbins + 1,
+        )
+
+    xbinned, yplot, yerr = bin_statistic(
+        x,
+        y,
+        nbins=nbins,
+        bins=bins,
+        weights=weights,
+        method=method,
+        sigma_clip=sigma_clip,
+        scale_err=scale_err,
+    )
+
+    if noplot:
+        return xbinned, yplot, yerr
+
     if ax is None:
         ax = plt.gca()
-    if data and not "noplot" in keys:
+
+    if data:
         ax.plot(x, y, ",", **dotkeys)
 
-    if robust is True:
-        yplot = [np.median(e) for e in ybinned]
-        yerr = np.array([mad(e) for e in ybinned])
-    elif robust:
-        yres = [
-            robust_average(e, sigma=None, clip=robust, mad=False, axis=0)
-            for e in ybinned
-        ]
-        yplot = [e[0] for e in yres]
-        yerr = [np.sqrt(e[3]) for e in yres]
-    elif weights is not None:
-        wbinned = [weights[e] for e in index]
-        yplot = [np.average(e, weights=w) for e, w in zip(ybinned, wbinned)]
-        if not scale:
-            # yerr = np.array([np.std((e - a) * np.sqrt(w))
-            #                 for e, w, a in zip(ybinned, wbinned, yplot)])
-            yerr = np.array(
-                [
-                    np.sqrt(np.std((e - a) * np.sqrt(w)) ** 2 / sum(w))
-                    for e, w, a in zip(ybinned, wbinned, yplot)
-                ]
-            )
-        else:
-            yerr = np.array(
-                [np.sqrt(1 / sum(w)) for e, w, a in zip(ybinned, wbinned, yplot)]
-            )
-        scale = False
-        print(yplot)
-    else:
-        yplot = [np.mean(e) for e in ybinned]
-        yerr = np.array([np.std(e) for e in ybinned])
-
-    if scale:
-        yerr /= np.sqrt(np.bincount(yd)[usedbins + 1])
-
-    if xerr:
-        xerr = np.array([bins, bins]) - np.array([xbinned, xbinned])
-    else:
+    if xerr is True:
+        # Find used bins and compute x-error from bin edges
+        labels = np.digitize(x_arr[valid], bins)
+        used = np.sort(np.unique(labels))
+        bin_slice = used - 1
+        xerr = np.array([xbinned - bins[bin_slice], bins[bin_slice + 1] - xbinned])
+    elif xerr is False:
         xerr = None
-    if not "noplot" in keys:
-        ax.errorbar(xbinned, yplot, yerr=yerr, xerr=xerr, ls=ls, **keys)
+
+    ax.errorbar(xbinned, yplot, yerr=yerr, xerr=xerr, ls=ls, **keys)
     return xbinned, yplot, yerr
