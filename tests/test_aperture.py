@@ -1,6 +1,10 @@
+import importlib.util
 import numpy as np
 import pytest
+from astropy.table import Table
 from gcphotom.aperture import (
+    cross_match,
+    detect_and_segment,
     estimate_error,
     extract_growth_curves,
     _extract_single_growth_curve,
@@ -127,3 +131,216 @@ class TestExtractGrowthCurves:
         assert len(result["radius"]) > 2
         assert result["radius"][0] > 0
         assert result["radius"][-1] > result["radius"][0]
+
+
+@pytest.fixture
+def controlled_catalog():
+    """Create a catalog with known bright, well-separated sources."""
+
+    def _make(positions, flux=1e5, shape=(256, 256), background=100, seed=42):
+        cat = Table()
+        cat["x"] = np.array([p[0] for p in positions])
+        cat["y"] = np.array([p[1] for p in positions])
+        cat["flux"] = np.full(len(positions), flux)
+        img, _ = simulate_image(
+            shape, cat, gamma=2.5, alpha=3.0, background=background, seed=seed
+        )
+        return img
+
+    return _make
+
+
+class TestDetectAndSegment:
+    def test_returns_expected_keys(self, controlled_catalog):
+        img = controlled_catalog([(64, 64)])
+        result = detect_and_segment(img, background=100)
+        assert "segmentation_image" in result
+        assert "positions" in result
+        assert "labels" in result
+
+    def test_detects_all_well_separated(self, controlled_catalog):
+        positions = [(50, 50), (100, 50), (150, 50), (50, 150), (150, 150)]
+        img = controlled_catalog(positions)
+        result = detect_and_segment(img, background=100)
+        assert len(result["positions"]) == len(positions)
+
+    def test_positions_close_to_truth(self, controlled_catalog):
+        positions = [(50, 50), (100, 100), (150, 150)]
+        img = controlled_catalog(positions)
+        result = detect_and_segment(img, background=100)
+        input_pos = np.array(positions)
+        dists = np.sqrt(np.sum((result["positions"] - input_pos) ** 2, axis=1))
+        assert np.all(dists < 1.0)
+
+    def test_labels_are_unique(self, controlled_catalog):
+        positions = [(50, 50), (100, 100), (150, 150)]
+        img = controlled_catalog(positions)
+        result = detect_and_segment(img, background=100)
+        assert len(result["labels"]) == len(np.unique(result["labels"]))
+
+    @pytest.mark.skipif(
+        importlib.util.find_spec("skimage") is None, reason="scikit-image not installed"
+    )
+    def test_deblends_close_pair(self, controlled_catalog):
+        positions = [(100, 100), (105, 105)]
+        img = controlled_catalog(positions)
+        result = detect_and_segment(img, background=100)
+        assert len(result["positions"]) == 2
+
+
+class TestExtractGrowthCurvesWithSegmentation:
+    def test_returns_contamination_keys(self, controlled_catalog):
+        img = controlled_catalog([(100, 100)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        assert "contamination" in result
+        assert "flux_clean" in result
+
+    def test_without_segmentation_no_contamination(self, controlled_catalog):
+        img = controlled_catalog([(100, 100)])
+        sub = img - 100
+        seg = detect_and_segment(img, background=100)
+        result = extract_growth_curves(sub, seg["positions"])
+        assert "contamination" not in result
+        assert "flux_clean" not in result
+
+    def test_isolated_source_low_contamination(self, controlled_catalog):
+        img = controlled_catalog([(128, 128)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        # Contamination for isolated source is flux in PSF wings outside segment.
+        # It should be a small fraction of total flux.
+        assert np.all(result["contamination"] / result["flux"] < 0.5)
+
+    def test_overlapping_pair_has_contamination(self, controlled_catalog):
+        img = controlled_catalog([(100, 100), (106, 106)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        radii = np.arange(3, 20, 1)
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            radii=radii,
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        assert np.any(result["contamination"] > 0)
+
+    def test_contamination_grows_with_radius(self, controlled_catalog):
+        img = controlled_catalog([(100, 100), (106, 106)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        radii = np.arange(3, 20, 1)
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            radii=radii,
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        # Contamination at large radius should exceed contamination at small radius
+        for row in result["contamination"]:
+            assert row[-1] > row[0]
+
+    def test_contamination_non_negative(self, controlled_catalog):
+        img = controlled_catalog([(100, 100), (106, 106)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        assert np.all(result["contamination"] >= 0)
+
+    def test_contamination_leq_total_flux(self, controlled_catalog):
+        img = controlled_catalog([(100, 100), (106, 106)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        assert np.all(result["contamination"] <= result["flux"] + 1)
+
+    def test_flux_clean_leq_flux_total(self, controlled_catalog):
+        img = controlled_catalog([(100, 100), (106, 106)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        assert np.all(result["flux_clean"] <= result["flux"] + 1)
+
+    def test_output_shapes(self, controlled_catalog):
+        img = controlled_catalog([(100, 100), (120, 120)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        radii = np.arange(3, 15, 1)
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            radii=radii,
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        n_sources = len(seg["positions"])
+        n_radii = len(radii)
+        assert result["flux"].shape == (n_sources, n_radii)
+        assert result["flux_clean"].shape == (n_sources, n_radii)
+        assert result["contamination"].shape == (n_sources, n_radii)
+
+    def test_end_to_end_simulated(self, controlled_catalog):
+        img = controlled_catalog([(60, 60), (128, 128), (196, 60)])
+        seg = detect_and_segment(img, background=100)
+        sub = img - 100
+        result = extract_growth_curves(
+            sub,
+            seg["positions"],
+            segmentation_image=seg["segmentation_image"],
+            labels=seg["labels"],
+        )
+        assert result["contamination"].shape[0] == len(seg["positions"])
+        assert np.all(result["contamination"] >= 0)
+        assert np.all(result["flux_clean"] >= 0)
+
+
+class TestCrossMatch:
+    def test_all_matched_for_well_separated(self):
+        input_pos = np.array([[50, 50], [100, 100], [150, 150]])
+        detected = np.array([[50.3, 50.2], [100.1, 99.9], [149.8, 150.1]])
+        result = cross_match(input_pos, detected, tolerance=5.0)
+        assert np.all(result["match_indices"] >= 0)
+        assert np.all(result["match_distances"] < 5.0)
+
+    def test_unmatched_beyond_tolerance(self):
+        input_pos = np.array([[50, 50]])
+        detected = np.array([[200, 200]])
+        result = cross_match(input_pos, detected, tolerance=5.0)
+        assert result["match_indices"][0] == -1
+        assert np.isinf(result["match_distances"][0])
+
+    def test_close_pair_both_matched(self):
+        input_pos = np.array([[100, 100], [106, 106]])
+        detected = np.array([[100.1, 100.1], [105.9, 105.9]])
+        result = cross_match(input_pos, detected, tolerance=5.0)
+        assert np.all(result["match_indices"] >= 0)
+        assert len(np.unique(result["match_indices"])) == 2

@@ -5,6 +5,7 @@
 # Features
 
 - **Growth curve fitting** using the analytical Moffat PSF model for accurate total flux, and local background estimation.
+- **Aperture contamination estimation** via segmentation-based source detection — identifies flux from neighboring sources in each aperture.
 - **Differentiable implementation** powered by JAX — ideal for gradient-based optimization, or integration into larger differentiable pipelines.
 - High performance through JIT compilation and automatic vectorization.
 - Seamless integration with the scientific Python ecosystem (Astropy, NumPy, Photutils).
@@ -45,6 +46,28 @@ fitted = fitter.results(best_params)
 print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
 print(f"Fitted fluxes: {fitted['flux'][:5]}")
 ```
+
+## Contamination Estimation
+
+Estimate aperture contamination by detecting sources and segmenting them:
+
+```python
+# 1. Detect sources and build segmentation image
+seg = gcp.detect_and_segment(image, background=100)
+
+# 2. Extract growth curves with contamination estimate
+result = gcp.extract_growth_curves(
+    image - 100, seg["positions"],
+    segmentation_image=seg["segmentation_image"],
+    labels=seg["labels"]
+)
+
+# 3. Inspect contamination per source
+print(f"Contamination: {result['contamination']}")
+print(f"Clean flux: {result['flux_clean']}")
+```
+
+The `segmentation_image` and `labels` parameters enable contamination estimation by masking out neighboring sources. The result includes `flux_clean` (flux with neighbors masked) and `contamination` (absolute contaminating flux).
 
 # Why gcphotom?
 

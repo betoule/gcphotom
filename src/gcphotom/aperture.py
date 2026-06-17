@@ -1,5 +1,11 @@
 import numpy as np
 from photutils.profiles import CurveOfGrowth
+from photutils.segmentation import (
+    detect_sources,
+    detect_threshold,
+    deblend_sources,
+    SourceCatalog,
+)
 
 
 def estimate_error(image, background, read_noise):
@@ -23,7 +29,7 @@ def estimate_error(image, background, read_noise):
     return np.sqrt(signal + read_noise**2)
 
 
-def _extract_single_growth_curve(image, position, radii, error=None):
+def _extract_single_growth_curve(image, position, radii, error=None, mask=None):
     """Extract a circular growth curve for a single source.
 
     Parameters
@@ -36,6 +42,9 @@ def _extract_single_growth_curve(image, position, radii, error=None):
         Aperture radii in pixels.
     error : 2D `~numpy.ndarray` or None
         Per-pixel 1-sigma error.
+    mask : 2D `~numpy.ndarray` of bool or None
+        Boolean mask where ``True`` indicates excluded pixels.
+        Passed directly to ``CurveOfGrowth``.
 
     Returns
     -------
@@ -46,14 +55,17 @@ def _extract_single_growth_curve(image, position, radii, error=None):
     profile_error : 1D `~numpy.ndarray`
         Flux uncertainty at each radius.
     """
-    cog = CurveOfGrowth(image, position, radii, error=error)
+    cog = CurveOfGrowth(image, position, radii, error=error, mask=mask)
     perr = (
         cog.profile_error if len(cog.profile_error) > 0 else np.zeros_like(cog.profile)
     )
     return cog.radius, cog.profile, perr
 
 
-def extract_growth_curves(image, positions, radii=None, error=None):
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+def extract_growth_curves(
+    image, positions, radii=None, error=None, segmentation_image=None, labels=None
+):
     """Extract circular growth curves for multiple sources.
 
     Parameters
@@ -67,6 +79,12 @@ def extract_growth_curves(image, positions, radii=None, error=None):
         values between 0.5 and 30 pixels.
     error : 2D `~numpy.ndarray` or None
         Per-pixel 1-sigma error.
+    segmentation_image : `~photutils.segmentation.SegmentationImage` or None
+        Segmentation map from :func:`detect_and_segment`. If provided,
+        contamination from neighboring sources is estimated.
+    labels : 1D `~numpy.ndarray` or None
+        Segment label for each source in ``positions``. Required if
+        ``segmentation_image`` is provided.
 
     Returns
     -------
@@ -77,6 +95,12 @@ def extract_growth_curves(image, positions, radii=None, error=None):
         * ``flux``: 2D array ``(n_sources, n_radii)`` of cumulative flux.
         * ``flux_err``: 2D array ``(n_sources, n_radii)`` of flux
           uncertainties.
+        * ``flux_clean``: 2D array ``(n_sources, n_radii)`` of flux with
+          neighboring sources masked. Present only if ``segmentation_image``
+          is provided.
+        * ``contamination``: 2D array ``(n_sources, n_radii)`` of
+          contaminating flux (``flux - flux_clean``). Present only if
+          ``segmentation_image`` is provided.
     """
     if radii is None:
         radii = np.logspace(np.log10(3), np.log10(30), num=10)
@@ -86,6 +110,10 @@ def extract_growth_curves(image, positions, radii=None, error=None):
     flux = np.zeros((n_sources, n_radii))
     flux_err = np.zeros((n_sources, n_radii))
 
+    if segmentation_image is not None:
+        flux_clean = np.zeros((n_sources, n_radii))
+        seg_data = segmentation_image.data
+
     for i, pos in enumerate(positions):
         _, profile, profile_err = _extract_single_growth_curve(
             image, pos, radii, error=error
@@ -93,8 +121,116 @@ def extract_growth_curves(image, positions, radii=None, error=None):
         flux[i] = profile
         flux_err[i] = profile_err
 
-    return {
+        if segmentation_image is not None:
+            mask = seg_data != labels[i]
+            _, clean_profile, _ = _extract_single_growth_curve(
+                image, pos, radii, mask=mask
+            )
+            flux_clean[i] = clean_profile
+
+    result = {
         "radius": radii,
         "flux": flux,
         "flux_err": flux_err,
+    }
+    if segmentation_image is not None:
+        result["flux_clean"] = flux_clean
+        result["contamination"] = flux - flux_clean
+
+    return result
+
+
+# pylint: enable=too-many-arguments,too-many-positional-arguments
+
+
+def detect_and_segment(image, background, n_sigma=3.0, n_pixels=10, deblend=True):
+    """Detect sources and produce a segmentation image.
+
+    Parameters
+    ----------
+    image : 2D `~numpy.ndarray`
+        Image data with background included.
+    background : float
+        Background level to subtract.
+    n_sigma : float
+        Detection significance threshold (passed to ``detect_threshold``).
+    n_pixels : int
+        Minimum number of connected pixels for a valid source.
+    deblend : bool
+        If ``True``, run ``deblend_sources`` to separate overlapping sources.
+
+    Returns
+    -------
+    result : dict
+        Dictionary with keys:
+
+        * ``segmentation_image``: `~photutils.segmentation.SegmentationImage`.
+        * ``positions``: ``(n_sources, 2)`` array of detected centroids
+          ``(x, y)``.
+        * ``labels``: 1D array of segment labels, one per source.
+    """
+    subtracted = image - background
+    threshold = detect_threshold(image, n_sigma=n_sigma, background=background)
+    seg = detect_sources(subtracted, threshold, n_pixels=n_pixels)
+
+    if deblend:
+        try:
+            seg = deblend_sources(
+                subtracted,
+                seg,
+                n_pixels=n_pixels,
+                n_levels=32,
+                contrast=0.001,
+                progress_bar=False,
+            )
+        except (ModuleNotFoundError, ImportError):
+            pass  # skimage not available; skip deblending
+
+    catalog = SourceCatalog(subtracted, seg)
+    positions = np.column_stack([catalog.x_centroid, catalog.y_centroid])
+    labels = np.array(seg.labels)
+
+    return {
+        "segmentation_image": seg,
+        "positions": positions,
+        "labels": labels,
+    }
+
+
+def cross_match(input_positions, detected_positions, tolerance=5.0):
+    """Match input positions to detected positions by nearest neighbor.
+
+    Parameters
+    ----------
+    input_positions : 2D `~numpy.ndarray`
+        ``(n_input, 2)`` array of ``(x, y)`` coordinates.
+    detected_positions : 2D `~numpy.ndarray`
+        ``(n_detected, 2)`` array of ``(x, y)`` coordinates.
+    tolerance : float
+        Maximum distance in pixels for a valid match.
+
+    Returns
+    -------
+    result : dict
+        Dictionary with keys:
+
+        * ``match_indices``: 1D array of integers. For each input position,
+          the index in ``detected_positions`` (or ``-1`` if unmatched).
+        * ``match_distances``: 1D array of floats. Distance in pixels
+          (or ``inf`` if unmatched).
+    """
+    n_input = len(input_positions)
+    match_indices = np.full(n_input, -1, dtype=int)
+    match_distances = np.full(n_input, np.inf)
+
+    for i, pos in enumerate(input_positions):
+        dists = np.sqrt(np.sum((detected_positions - pos) ** 2, axis=1))
+        idx = np.argmin(dists)
+        if dists[idx] <= tolerance:
+            match_indices[i] = idx
+            match_distances[i] = dists[idx]
+
+    return {
+        "match_indices": match_indices,
+        "match_distances": match_distances,
     }
