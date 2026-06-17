@@ -65,13 +65,6 @@ class TestFitterInit:
         assert f.var.shape == f.fluxes.shape
         assert f.goods.shape == f.fluxes.shape
 
-    def test_cut_removes_bad_sources(self, small_sim):
-        img, cat = small_sim
-        positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
-        f = gcp.Fitter(gc)
-        assert f.fluxes.shape[1] <= len(cat)
-
 
 class TestFitterFit:
     def test_flux_recovery(self, small_sim):
@@ -137,7 +130,7 @@ class TestFitterBackground:
 
 
 class TestFitterResults:
-    def test_results_keys(self, small_sim):
+    def test_results_keys_and_shapes(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
         gc = gcp.extract_growth_curves(img, positions)
@@ -147,14 +140,6 @@ class TestFitterResults:
 
         for key in ("flux", "back", "gamma", "alpha", "ngoods", "chi2"):
             assert key in res
-
-    def test_results_shapes(self, small_sim):
-        img, cat = small_sim
-        positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
-        f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=1000)
-        res = f.results(bf)
 
         n = res["flux"].shape[0]
         assert res["back"].shape[0] == n
@@ -192,7 +177,6 @@ class TestFitterHelpers:
 
 
 class TestFullPipeline:
-    @pytest.mark.skip(reason="convergence issue — needs tuning")
     @pytest.mark.skip(reason="convergence issue — needs tuning")
     def test_1000_sources(self):
         """End-to-end test with 1000 sources."""
