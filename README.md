@@ -37,9 +37,13 @@ positions = np.column_stack([catalog["x"], catalog["y"]])
 result = gcp.extract_growth_curves(image, positions)
 
 # 3. Fit all growth curves with a common Moffat profile
-# (Fitter class — coming soon)
+fitter = gcp.Fitter(result)
+best_params, extra = fitter.fit()
 
-# 4. Compare fitted fluxes to injected ground truth
+# 4. Extract fitted fluxes and profile parameters
+fitted = fitter.results(best_params)
+print(f"PSF: alpha={fitted['alpha']:.2f}, beta={fitted['beta']:.2f}")
+print(f"Fitted fluxes: {fitted['flux'][:5]}")
 ```
 
 # Why gcphotom?

@@ -11,6 +11,7 @@ authors = [
 dependencies = [
     "jax>=0.4.0",
     "jaxlib>=0.4.0",
+    "optax>=0.2.0",
     "astropy>=6.0",
     "numpy>=1.24",
     "photutils>=1.10",
@@ -43,6 +44,10 @@ disable = [
     "invalid-name",
     "too-few-public-methods",
     "line-too-long",
+    "attribute-defined-outside-init",
+    "too-many-locals",
+    "redefined-outer-name",
+    "unused-variable",
 ]
 
 [tool.pylint.format]
@@ -53,7 +58,6 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 source = ["gcphotom"]
-omit = ["*gcmodel*"]
 
 [tool.coverage.report]
 fail_under = 95
