@@ -30,41 +30,40 @@ uv sync --all-extras --dev
 import numpy as np
 import gcphotom as gcp
 
-# 1. Simulate a realistic astronomical image with ~1000 stars
-image, catalog = gcp.simulate_image()
+# 1. Simulate a realistic astronomical image
+background = 100
+read_noise = 5
+image, catalog = gcp.simulate_image(background=background, read_noise=read_noise)
 
-# 2. Extract growth curves for each source
-positions = np.column_stack([catalog["x"], catalog["y"]])
-result = gcp.extract_growth_curves(image, positions)
+# 2. Detect sources and build segmentation image
+seg = gcp.detect_and_segment(image, background=background)
 
-# 3. Fit all growth curves with a common Moffat profile
-fitter = gcp.Fitter(result)
-best_params, extra = fitter.fit()
+# 3. Compute per-pixel error estimate
+error = gcp.estimate_error(image, background=background, read_noise=read_noise)
 
-# 4. Extract fitted fluxes and profile parameters
-fitted = fitter.results(best_params)
-print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
-print(f"Fitted fluxes: {fitted['flux'][:5]}")
-```
-
-## Contamination Estimation
-
-Estimate aperture contamination by detecting sources and segmenting them:
-
-```python
-# 1. Detect sources and build segmentation image
-seg = gcp.detect_and_segment(image, background=100)
-
-# 2. Extract growth curves with contamination estimate
+# 4. Extract growth curves with contamination estimation
 result = gcp.extract_growth_curves(
-    image - 100, seg["positions"],
+    image - background, seg["positions"],
+    error=error,
     segmentation_image=seg["segmentation_image"],
     labels=seg["labels"]
 )
 
-# 3. Inspect contamination per source
-print(f"Contamination: {result['contamination']}")
-print(f"Clean flux: {result['flux_clean']}")
+# 5. Fit all growth curves with a common Moffat profile
+fitter = gcp.Fitter(result)
+best_params, extra = fitter.fit()
+
+# 6. Match detected sources back to the input catalog
+input_pos = np.column_stack([catalog["x"], catalog["y"]])
+match = gcp.cross_match(input_pos, seg["positions"])
+fitted = fitter.results(best_params)
+matched = match["match_indices"] >= 0
+matched_flux = fitted["flux"][match["match_indices"][matched]]
+
+# 7. Inspect results
+print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
+print(f"Recovered / injected flux: {matched_flux[:5]} / {catalog['flux'][matched][:5]}")
+print(f"Contamination: {result['contamination'][:, -1][match['match_indices'][matched][:5]]}")
 ```
 
 The `segmentation_image` and `labels` parameters enable contamination estimation by masking out neighboring sources. The result includes `flux_clean` (flux with neighbors masked) and `contamination` (absolute contaminating flux).
