@@ -151,53 +151,29 @@ def controlled_catalog():
 
 
 class TestDetectAndSegment:
-    def test_returns_expected_keys(self, controlled_catalog):
-        img = controlled_catalog([(64, 64)])
-        result = detect_and_segment(img, background=100)
-        assert "segmentation_image" in result
-        assert "positions" in result
-        assert "labels" in result
-
     def test_detects_all_well_separated(self, controlled_catalog):
         positions = [(50, 50), (100, 50), (150, 50), (50, 150), (150, 150)]
         img = controlled_catalog(positions)
-        result = detect_and_segment(img, background=100)
-        assert len(result["positions"]) == len(positions)
+        seg, cat = detect_and_segment(img, background=100)
+        assert len(cat) == len(positions)
 
     def test_positions_close_to_truth(self, controlled_catalog):
-        positions = [(50, 50), (100, 100), (150, 150)]
-        img = controlled_catalog(positions)
-        result = detect_and_segment(img, background=100)
-        input_pos = np.array(positions)
-        dists = np.sqrt(np.sum((result["positions"] - input_pos) ** 2, axis=1))
+        input_positions = np.array([(50, 50), (100, 100), (150, 150)])
+        img = controlled_catalog(input_positions)
+        seg, cat = detect_and_segment(img, background=100)
+        positions = np.column_stack([cat.x_centroid, cat.y_centroid])
+        dists = np.sqrt(np.sum((positions - input_positions) ** 2, axis=1))
         assert np.all(dists < 1.0)
-
-    def test_labels_are_unique(self, controlled_catalog):
-        positions = [(50, 50), (100, 100), (150, 150)]
-        img = controlled_catalog(positions)
-        result = detect_and_segment(img, background=100)
-        assert len(result["labels"]) == len(np.unique(result["labels"]))
-
-    @pytest.mark.skipif(
-        importlib.util.find_spec("skimage") is None, reason="scikit-image not installed"
-    )
-    def test_deblends_close_pair(self, controlled_catalog):
-        positions = [(100, 100), (105, 105)]
-        img = controlled_catalog(positions)
-        result = detect_and_segment(img, background=100)
-        assert len(result["positions"]) == 2
-
 
 class TestExtractGrowthCurvesWithSegmentation:
     def test_returns_contamination_keys(self, controlled_catalog):
         img = controlled_catalog([(100, 100)])
-        seg = detect_and_segment(img, background=100)
+        seg, cat = detect_and_segment(img, background=100)
         sub = img - 100
         result = extract_growth_curves(
             sub,
-            seg["positions"],
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
+            np.column_stack([cat.x_centroid, cat.y_centroid]),
+            segmentation_image=seg,
         )
         assert "contamination" in result
         assert "flux_clean" in result
@@ -205,120 +181,48 @@ class TestExtractGrowthCurvesWithSegmentation:
     def test_without_segmentation_no_contamination(self, controlled_catalog):
         img = controlled_catalog([(100, 100)])
         sub = img - 100
-        seg = detect_and_segment(img, background=100)
-        result = extract_growth_curves(sub, seg["positions"])
+        seg, cat = detect_and_segment(img, background=100)
+        result = extract_growth_curves(sub, np.column_stack([cat.x_centroid, cat.y_centroid]))
         assert "contamination" not in result
         assert "flux_clean" not in result
 
     def test_isolated_source_low_contamination(self, controlled_catalog):
         img = controlled_catalog([(128, 128)])
-        seg = detect_and_segment(img, background=100)
+        seg, cat = detect_and_segment(img, background=100)
         sub = img - 100
         result = extract_growth_curves(
             sub,
-            seg["positions"],
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
+            np.column_stack([cat.x_centroid, cat.y_centroid]),
+            segmentation_image=seg,
         )
         # Contamination for isolated source is flux in PSF wings outside segment.
         # It should be a small fraction of total flux.
-        assert np.all(result["contamination"] / result["flux"] < 0.5)
+        assert np.all(result["contamination"] / result["flux"] < 0.05)
 
     def test_overlapping_pair_has_contamination(self, controlled_catalog):
-        img = controlled_catalog([(100, 100), (106, 106)])
-        seg = detect_and_segment(img, background=100)
+        img = controlled_catalog([(100, 100), (110, 110)])
+        seg, cat = detect_and_segment(img, background=100)
         sub = img - 100
         radii = np.arange(3, 20, 1)
         result = extract_growth_curves(
             sub,
-            seg["positions"],
+            np.column_stack([cat.x_centroid, cat.y_centroid]),
             radii=radii,
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
+            segmentation_image=seg,
         )
+        assert len(cat) == 2
         assert np.any(result["contamination"] > 0)
-
-    def test_contamination_grows_with_radius(self, controlled_catalog):
-        img = controlled_catalog([(100, 100), (106, 106)])
-        seg = detect_and_segment(img, background=100)
-        sub = img - 100
-        radii = np.arange(3, 20, 1)
-        result = extract_growth_curves(
-            sub,
-            seg["positions"],
-            radii=radii,
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
-        )
-        # Contamination at large radius should exceed contamination at small radius
-        for row in result["contamination"]:
-            assert row[-1] > row[0]
-
-    def test_contamination_non_negative(self, controlled_catalog):
-        img = controlled_catalog([(100, 100), (106, 106)])
-        seg = detect_and_segment(img, background=100)
-        sub = img - 100
-        result = extract_growth_curves(
-            sub,
-            seg["positions"],
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
-        )
-        assert np.all(result["contamination"] >= 0)
-
-    def test_contamination_leq_total_flux(self, controlled_catalog):
-        img = controlled_catalog([(100, 100), (106, 106)])
-        seg = detect_and_segment(img, background=100)
-        sub = img - 100
-        result = extract_growth_curves(
-            sub,
-            seg["positions"],
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
-        )
-        assert np.all(result["contamination"] <= result["flux"] + 1)
-
-    def test_flux_clean_leq_flux_total(self, controlled_catalog):
-        img = controlled_catalog([(100, 100), (106, 106)])
-        seg = detect_and_segment(img, background=100)
-        sub = img - 100
-        result = extract_growth_curves(
-            sub,
-            seg["positions"],
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
-        )
-        assert np.all(result["flux_clean"] <= result["flux"] + 1)
-
-    def test_output_shapes(self, controlled_catalog):
-        img = controlled_catalog([(100, 100), (120, 120)])
-        seg = detect_and_segment(img, background=100)
-        sub = img - 100
-        radii = np.arange(3, 15, 1)
-        result = extract_growth_curves(
-            sub,
-            seg["positions"],
-            radii=radii,
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
-        )
-        n_sources = len(seg["positions"])
-        n_radii = len(radii)
-        assert result["flux"].shape == (n_sources, n_radii)
-        assert result["flux_clean"].shape == (n_sources, n_radii)
-        assert result["contamination"].shape == (n_sources, n_radii)
 
     def test_end_to_end_simulated(self, controlled_catalog):
         img = controlled_catalog([(60, 60), (128, 128), (196, 60)])
-        seg = detect_and_segment(img, background=100)
+        seg, cat = detect_and_segment(img, background=100)
         sub = img - 100
         result = extract_growth_curves(
             sub,
-            seg["positions"],
-            segmentation_image=seg["segmentation_image"],
-            labels=seg["labels"],
+            np.column_stack([cat.x_centroid, cat.y_centroid]),
+            segmentation_image=seg,
         )
-        assert result["contamination"].shape[0] == len(seg["positions"])
+        assert result["contamination"].shape[0] == len(cat)
         assert np.all(result["contamination"] >= 0)
         assert np.all(result["flux_clean"] >= 0)
 

@@ -36,17 +36,18 @@ read_noise = 5
 image, catalog = gcp.simulate_image(background=background, read_noise=read_noise)
 
 # 2. Detect sources and build segmentation image
-seg = gcp.detect_and_segment(image, background=background)
+seg, cat = gcp.detect_and_segment(image, background=background)
+positions = np.column_stack([cat.x_centroid, cat.y_centroid])
 
 # 3. Compute per-pixel error estimate
 error = gcp.estimate_error(image, background=background, read_noise=read_noise)
 
 # 4. Extract growth curves with contamination estimation
 result = gcp.extract_growth_curves(
-    image - background, seg["positions"],
+    image - background,
+    positions,
     error=error,
-    segmentation_image=seg["segmentation_image"],
-    labels=seg["labels"]
+    segmentation_image=seg,
 )
 
 # 5. Fit all growth curves with a common Moffat profile
@@ -55,7 +56,7 @@ best_params, extra = fitter.fit()
 
 # 6. Match detected sources back to the input catalog
 input_pos = np.column_stack([catalog["x"], catalog["y"]])
-match = gcp.cross_match(input_pos, seg["positions"])
+match = gcp.cross_match(input_pos, positions)
 fitted = fitter.results(best_params)
 matched = match["match_indices"] >= 0
 matched_flux = fitted["flux"][match["match_indices"][matched]]

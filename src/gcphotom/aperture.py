@@ -64,7 +64,7 @@ def _extract_single_growth_curve(image, position, radii, error=None, mask=None):
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 def extract_growth_curves(
-    image, positions, radii=None, error=None, segmentation_image=None, labels=None
+    image, positions, radii=None, error=None, segmentation_image=None
 ):
     """Extract circular growth curves for multiple sources.
 
@@ -82,9 +82,6 @@ def extract_growth_curves(
     segmentation_image : `~photutils.segmentation.SegmentationImage` or None
         Segmentation map from :func:`detect_and_segment`. If provided,
         contamination from neighboring sources is estimated.
-    labels : 1D `~numpy.ndarray` or None
-        Segment label for each source in ``positions``. Required if
-        ``segmentation_image`` is provided.
 
     Returns
     -------
@@ -122,7 +119,7 @@ def extract_growth_curves(
         flux_err[i] = profile_err
 
         if segmentation_image is not None:
-            mask = seg_data != labels[i]
+            mask = (seg_data != segmentation_image.labels[i]) & (seg_data > 0)
             _, clean_profile, _ = _extract_single_growth_curve(
                 image, pos, radii, mask=mask
             )
@@ -161,13 +158,8 @@ def detect_and_segment(image, background, n_sigma=3.0, n_pixels=10, deblend=True
 
     Returns
     -------
-    result : dict
-        Dictionary with keys:
-
-        * ``segmentation_image``: `~photutils.segmentation.SegmentationImage`.
-        * ``positions``: ``(n_sources, 2)`` array of detected centroids
-          ``(x, y)``.
-        * ``labels``: 1D array of segment labels, one per source.
+    segmentation_image: `~photutils.segmentation.SegmentationImage`.
+    catalog: `~photutils.segmentation.SourceCatalog`.
     """
     subtracted = image - background
     threshold = detect_threshold(image, n_sigma=n_sigma, background=background)
@@ -187,14 +179,9 @@ def detect_and_segment(image, background, n_sigma=3.0, n_pixels=10, deblend=True
             pass  # skimage not available; skip deblending
 
     catalog = SourceCatalog(subtracted, seg)
-    positions = np.column_stack([catalog.x_centroid, catalog.y_centroid])
-    labels = np.array(seg.labels)
 
-    return {
-        "segmentation_image": seg,
-        "positions": positions,
-        "labels": labels,
-    }
+    return seg, catalog
+
 
 
 def cross_match(input_positions, detected_positions, tolerance=5.0):
