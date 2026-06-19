@@ -1,24 +1,24 @@
 import numpy as np
-from gcphotom.simulator import make_source_catalog, simulate_image
+from gcphotom.simulator import make_realistic_source_catalog, simulate_image
 
 
 class TestMakeSourceCatalog:
     def test_positions_within_bounds(self):
         shape = (256, 256)
         margin = 20
-        cat = make_source_catalog(50, shape=shape, margin=margin, seed=42)
+        cat = make_realistic_source_catalog(50, shape=shape, margin=margin, seed=42)
         assert np.all(cat["x"] >= margin)
         assert np.all(cat["x"] < shape[1] - margin)
         assert np.all(cat["y"] >= margin)
         assert np.all(cat["y"] < shape[0] - margin)
 
     def test_flux_range(self):
-        cat = make_source_catalog(100, shape=(256, 256), seed=42)
+        cat = make_realistic_source_catalog(100, shape=(256, 256), seed=42)
         assert np.all(cat["flux"] >= 100)
         assert np.all(cat["flux"] <= 1e6)
 
     def test_flux_log_uniform_mean(self):
-        cat = make_source_catalog(5000, shape=(2048, 2048), seed=42)
+        cat = make_realistic_source_catalog(5000, shape=(2048, 2048), seed=42)
         log_flux = np.log10(cat["flux"])
         expected_mean = (np.log10(100) + np.log10(1e6)) / 2
         assert abs(np.mean(log_flux) - expected_mean) < 0.05
@@ -26,7 +26,7 @@ class TestMakeSourceCatalog:
 
 class TestSimulateImage:
     def test_image_shape(self):
-        cat = make_source_catalog(10, shape=(128, 128), seed=42)
+        cat = make_realistic_source_catalog(10, shape=(128, 128), seed=42)
         img, _ = simulate_image((128, 128), cat, gamma=2.5, alpha=3.0, seed=42)
         assert img.shape == (128, 128)
 
@@ -36,12 +36,12 @@ class TestSimulateImage:
         assert len(cat) > 0
 
     def test_no_nan(self):
-        cat = make_source_catalog(10, shape=(128, 128), seed=42)
+        cat = make_realistic_source_catalog(10, shape=(128, 128), seed=42)
         img, _ = simulate_image((128, 128), cat, gamma=2.5, alpha=3.0, seed=42)
         assert np.all(np.isfinite(img))
 
     def test_background_level(self):
-        cat = make_source_catalog(1, shape=(256, 256), seed=42)
+        cat = make_realistic_source_catalog(1, shape=(256, 256), seed=42)
         cat["x"][0] = 128
         cat["y"][0] = 128
         img, _ = simulate_image(
@@ -53,7 +53,7 @@ class TestSimulateImage:
         assert np.abs(np.median(bg_region) - 500) < 50
 
     def test_noise_statistics(self):
-        cat = make_source_catalog(1, shape=(256, 256), seed=42)
+        cat = make_realistic_source_catalog(1, shape=(256, 256), seed=42)
         cat["x"][0] = 128
         cat["y"][0] = 128
         img, _ = simulate_image(
@@ -73,7 +73,7 @@ class TestSimulateImage:
 
     def test_flux_conservation(self):
         gamma, alpha = 2.5, 3.0
-        cat = make_source_catalog(5, shape=(512, 512), seed=42)
+        cat = make_realistic_source_catalog(5, shape=(512, 512), seed=42)
         for i in range(len(cat)):
             cat["x"][i] = 100 + i * 80
             cat["y"][i] = 256

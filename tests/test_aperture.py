@@ -9,13 +9,13 @@ from gcphotom.aperture import (
     extract_growth_curves,
     _extract_single_growth_curve,
 )
-from gcphotom.simulator import make_source_catalog, simulate_image
+from gcphotom.simulator import make_realistic_source_catalog, simulate_image
 
 
 @pytest.fixture
 def simple_image():
     shape = (128, 128)
-    cat = make_source_catalog(1, shape=shape, seed=42)
+    cat = make_realistic_source_catalog(1, shape=shape, seed=42)
     cat["x"][0] = 64
     cat["y"][0] = 64
     img, returned_cat = simulate_image(
@@ -91,7 +91,7 @@ class TestExtractSingleGrowthCurve:
 class TestExtractGrowthCurves:
     def test_multi_source(self):
         shape = (256, 256)
-        cat = make_source_catalog(5, shape=shape, seed=42)
+        cat = make_realistic_source_catalog(5, shape=shape, seed=42)
         for i in range(len(cat)):
             cat["x"][i] = 50 + i * 40
             cat["y"][i] = 128
@@ -106,7 +106,7 @@ class TestExtractGrowthCurves:
 
     def test_with_error_map(self):
         shape = (256, 256)
-        cat = make_source_catalog(3, shape=shape, seed=42)
+        cat = make_realistic_source_catalog(3, shape=shape, seed=42)
         for i in range(len(cat)):
             cat["x"][i] = 80 + i * 50
             cat["y"][i] = 128
@@ -121,7 +121,7 @@ class TestExtractGrowthCurves:
 
     def test_default_radii(self):
         shape = (128, 128)
-        cat = make_source_catalog(1, shape=shape, seed=42)
+        cat = make_realistic_source_catalog(1, shape=shape, seed=42)
         cat["x"][0] = 64
         cat["y"][0] = 64
         img, _ = simulate_image(shape, cat, gamma=2.5, alpha=3.0, background=0, seed=42)

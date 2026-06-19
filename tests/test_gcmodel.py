@@ -15,7 +15,7 @@ import gcphotom as gcp
 def small_sim():
     """Small simulation for fast unit tests."""
     shape = (256, 256)
-    cat = gcp.make_source_catalog(20, shape=shape, seed=42)
+    cat = gcp.make_realistic_source_catalog(20, shape=shape, seed=42)
     for i in range(len(cat)):
         cat["x"][i] = 40 + (i % 5) * 45
         cat["y"][i] = 40 + (i // 5) * 55
@@ -29,7 +29,7 @@ def small_sim():
 def small_sim_with_bg():
     """Small simulation with background."""
     shape = (256, 256)
-    cat = gcp.make_source_catalog(20, shape=shape, seed=42)
+    cat = gcp.make_realistic_source_catalog(20, shape=shape, seed=42)
     for i in range(len(cat)):
         cat["x"][i] = 40 + (i % 5) * 45
         cat["y"][i] = 40 + (i // 5) * 55
