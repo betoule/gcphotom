@@ -84,8 +84,6 @@ class TestMoffatFunctions:
         wr = f.weighted_residuals(bf, mask=True)
         assert wr.shape[0] > 0
         # plot with provided axes
-        import matplotlib.pyplot as plt
-
         fig, (ax1, ax2) = plt.subplots(2, 1)
         f.plot_PSF(bf, axes=(ax1, ax2))
         plt.close(fig)
@@ -105,11 +103,6 @@ class TestMoffatFunctions:
             f.fit(niter=1)
 
     def test_fit_show_plots(self, small_sim):
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
         gc = gcp.extract_growth_curves(img, positions)

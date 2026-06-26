@@ -280,7 +280,7 @@ def _get_xy(obj):
             x = np.asarray(obj["x"], dtype=float)
             y = np.asarray(obj["y"], dtype=float)
             return x, y
-        except Exception:
+        except (KeyError, TypeError, ValueError, IndexError):
             pass
     if hasattr(obj, "x_centroid") and hasattr(obj, "y_centroid"):
         x = np.asarray(obj.x_centroid, dtype=float)
@@ -290,6 +290,43 @@ def _get_xy(obj):
     if arr.ndim == 2 and arr.shape[1] == 2:
         return arr[:, 0], arr[:, 1]
     raise TypeError("Cannot extract (x, y) positions from input")
+
+
+def _empty_table_like(b):
+    if hasattr(b, "colnames"):
+        return Table({c: np.array([], dtype=float) for c in b.colnames})
+    return Table()
+
+
+def _no_match_table(b, n):
+    if hasattr(b, "colnames"):
+        cols = {}
+        for c in b.colnames:
+            arr = np.asarray(b[c])
+            if np.issubdtype(arr.dtype, np.number):
+                cols[c] = np.full(n, np.nan, dtype=float)
+            else:
+                cols[c] = np.array([None] * n, dtype=object)
+        return Table(cols)
+    return Table()
+
+
+def _build_matched_table(b, idx, n):
+    cols = {}
+    for c in b.colnames:
+        arr = np.asarray(b[c])
+        if np.issubdtype(arr.dtype, np.number):
+            out = np.full(n, np.nan, dtype=float)
+            good = idx >= 0
+            out[good] = arr[idx[good]]
+            cols[c] = out
+        else:
+            out = np.empty(n, dtype=object)
+            out[:] = None
+            good = idx >= 0
+            out[good] = arr[idx[good]]
+            cols[c] = out
+    return Table(cols)
 
 
 def cross_match(a, b, tolerance=5.0):
@@ -315,83 +352,59 @@ def cross_match(a, b, tolerance=5.0):
         try:
             arr = np.asarray(x, dtype=float)
             return arr.ndim == 2 and arr.shape[1] == 2
-        except Exception:
+        except (ValueError, TypeError):
             return False
 
+    result = None
     if _looks_like_pos(a) and _looks_like_pos(b):
         ap = np.asarray(a, dtype=float)
         bp = np.asarray(b, dtype=float)
         n_in = len(ap)
         if n_in == 0:
-            return {
+            result = {
                 "match_indices": np.array([], dtype=int),
                 "match_distances": np.array([], dtype=float),
             }
-        if len(bp) == 0:
-            return {
+        elif len(bp) == 0:
+            result = {
                 "match_indices": np.full(n_in, -1, dtype=int),
                 "match_distances": np.full(n_in, np.inf),
             }
-        ref = {"x": bp[:, 0], "y": bp[:, 1]}
-        qry = {"x": ap[:, 0], "y": ap[:, 1]}
-        idx, dist = match(
-            ref,
-            qry,
-            project=False,
-            xy=True,
-            radius=float(tolerance),
-            compute_distances=True,
-        )
-        return {"match_indices": idx, "match_distances": dist}
-
-    # Catalog-oriented path: a=det (query), b=sim (ref catalog)
-    dx, dy = _get_xy(a)
-    sx, sy = _get_xy(b)
-    n = len(dx)
-    if n == 0:
-        # return empty table with same columns as b if possible
-        if hasattr(b, "colnames"):
-            return Table({c: np.array([], dtype=float) for c in b.colnames})
-        return Table()
-    if len(sx) == 0:
-        if hasattr(b, "colnames"):
-            cols = {}
-            for c in b.colnames:
-                arr = np.asarray(b[c])
-                if np.issubdtype(arr.dtype, np.number):
-                    cols[c] = np.full(n, np.nan, dtype=float)
-                else:
-                    cols[c] = np.array([None] * n, dtype=object)
-            return Table(cols)
-        return Table()
-
-    ref = {"x": sx, "y": sy}
-    qry = {"x": dx, "y": dy}
-    idx, _ = match(
-        ref,
-        qry,
-        project=False,
-        xy=True,
-        radius=float(tolerance),
-        compute_distances=True,
-    )
-
-    if hasattr(b, "colnames"):
-        cols = {}
-        for c in b.colnames:
-            arr = np.asarray(b[c])
-            if np.issubdtype(arr.dtype, np.number):
-                out = np.full(n, np.nan, dtype=float)
-                good = idx >= 0
-                out[good] = arr[idx[good]]
-                cols[c] = out
+        else:
+            ref = {"x": bp[:, 0], "y": bp[:, 1]}
+            qry = {"x": ap[:, 0], "y": ap[:, 1]}
+            idx, dist = match(
+                ref,
+                qry,
+                project=False,
+                xy=True,
+                radius=float(tolerance),
+                compute_distances=True,
+            )
+            result = {"match_indices": idx, "match_distances": dist}
+    else:
+        # Catalog-oriented path: a=det (query), b=sim (ref catalog)
+        dx, dy = _get_xy(a)
+        sx, sy = _get_xy(b)
+        n = len(dx)
+        if n == 0:
+            result = _empty_table_like(b)
+        elif len(sx) == 0:
+            result = _no_match_table(b, n)
+        else:
+            ref = {"x": sx, "y": sy}
+            qry = {"x": dx, "y": dy}
+            idx, _ = match(
+                ref,
+                qry,
+                project=False,
+                xy=True,
+                radius=float(tolerance),
+                compute_distances=True,
+            )
+            if hasattr(b, "colnames"):
+                result = _build_matched_table(b, idx, n)
             else:
-                out = np.empty(n, dtype=object)
-                out[:] = None
-                good = idx >= 0
-                out[good] = arr[idx[good]]
-                cols[c] = out
-        return Table(cols)
+                result = {"match_indices": idx, "match_distances": np.full(n, np.inf)}
 
-    # Fallback: if b had no columns (e.g. raw positions passed oddly), return indices style
-    return {"match_indices": idx, "match_distances": np.full(n, np.inf)}
+    return result
