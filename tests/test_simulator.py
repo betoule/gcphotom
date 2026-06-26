@@ -1,4 +1,6 @@
 import numpy as np
+
+import gcphotom as gcp
 from gcphotom.simulator import make_realistic_source_catalog, simulate_image
 
 
@@ -84,3 +86,8 @@ class TestSimulateImage:
         total_image = img.sum()
         ratio = total_image / total_injected
         assert 0.8 < ratio < 1.3
+
+    def test_make_test_source_catalog(self):
+        cat = gcp.make_test_source_catalog(n_sources_side=3, shape=(64, 64))
+        assert len(cat) == 9
+        assert "x" in cat.colnames and "y" in cat.colnames and "flux" in cat.colnames

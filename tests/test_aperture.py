@@ -164,6 +164,12 @@ class TestDetectAndSegment:
         dists = np.sqrt(np.sum((positions - input_positions) ** 2, axis=1))
         assert np.all(dists < 1.0)
 
+    def test_detects_without_explicit_background(self, controlled_catalog):
+        positions = [(50, 50), (100, 50), (150, 50)]
+        img = controlled_catalog(positions)
+        seg, cat = detect_and_segment(img)
+        assert len(cat) == len(positions)
+
 
 class TestExtractGrowthCurvesWithSegmentation:
     def test_returns_contamination_keys(self, controlled_catalog):
@@ -252,3 +258,61 @@ class TestCrossMatch:
         result = cross_match(input_pos, detected, tolerance=5.0)
         assert np.all(result["match_indices"] >= 0)
         assert len(np.unique(result["match_indices"])) == 2
+
+
+class TestExtractGrowthCurvesCatalogInput:
+    def test_extract_accepts_table(self, controlled_catalog):
+        img = controlled_catalog([(60, 60), (120, 120)])
+        seg, cat = detect_and_segment(img, background=100)
+        # build a Table from the catalog
+        tab = Table({"x": cat.x_centroid, "y": cat.y_centroid})
+        result = extract_growth_curves(img, tab, segmentation_image=seg)
+        assert result["flux"].shape[0] == len(cat)
+
+    def test_extract_accepts_source_catalog(self, controlled_catalog):
+        img = controlled_catalog([(70, 70)])
+        seg, cat = detect_and_segment(img, background=100)
+        result = extract_growth_curves(img, cat, segmentation_image=seg)
+        assert result["flux"].shape[0] == 1
+
+    def test_auto_error_path(self, controlled_catalog):
+        img = controlled_catalog([(80, 80)])
+        seg, cat = detect_and_segment(img, background=100)
+        # do not pass error -> auto inside
+        result = extract_growth_curves(img, cat, segmentation_image=seg)
+        assert np.all(result["flux_err"] >= 0)
+
+    def test_extract_accepts_positions_list(self, controlled_catalog):
+        img = controlled_catalog([(55, 55)])
+        seg, cat = detect_and_segment(img, background=100)
+        poss = [[float(cat.x_centroid[0]), float(cat.y_centroid[0])]]
+        result = extract_growth_curves(img, poss, segmentation_image=seg)
+        assert result["flux"].shape[0] == 1
+
+    def test_extract_rejects_bad_sources(self, controlled_catalog):
+        img = controlled_catalog([(90, 90)])
+        with pytest.raises(TypeError):
+            extract_growth_curves(img, "not-positions")
+
+    def test_extract_rejects_1d_array(self, controlled_catalog):
+        img = controlled_catalog([(88, 88)])
+        with pytest.raises(TypeError):
+            extract_growth_curves(img, np.array([1.0, 2.0]))
+
+    def test_extract_table_without_xy_raises(self, controlled_catalog):
+        img = controlled_catalog([(95, 95)])
+        bad = Table({"a": [1], "b": [2]})
+        with pytest.raises(TypeError):
+            extract_growth_curves(img, bad)
+
+    def test_deblend_import_error_path(self, controlled_catalog, monkeypatch):
+        img = controlled_catalog([(60, 60)])
+        # force deblend_sources to raise ImportError to hit except
+        import gcphotom.aperture as ap
+
+        def _boom(*a, **k):
+            raise ImportError("no skimage")
+
+        monkeypatch.setattr(ap, "deblend_sources", _boom)
+        seg, cat = detect_and_segment(img, deblend=True)
+        assert len(cat) >= 1  # still detects without deblend

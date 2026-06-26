@@ -78,3 +78,13 @@ class TestBinplot:
 
         assert len(xbinned) == 5
         assert np.all(np.isfinite(yplot))
+
+    def test_xerr_false(self):
+        np.random.seed(42)
+        x = np.random.uniform(0, 10, 50)
+        y = np.random.randn(50)
+
+        xbinned, yplot, yerr = binplot(x, y, nbins=5, xerr=False)
+
+        assert len(xbinned) == 5
+        assert np.all(np.isfinite(yplot))

@@ -104,3 +104,12 @@ class TestBinStatistic:
         _, _, err_scaled = bin_statistic(x, y, nbins=10, scale_err=True)
         _, _, err_raw = bin_statistic(x, y, nbins=10, scale_err=False)
         assert np.all(err_raw >= err_scaled)
+
+    def test_weighted_no_scale(self):
+        np.random.seed(42)
+        x = np.random.uniform(0, 10, 50)
+        y = np.random.randn(50)
+        w = np.ones(50)
+        _, _, err = bin_statistic(x, y, nbins=5, weights=w, scale_err=False)
+        assert len(err) == 5
+        assert np.all(err >= 0)

@@ -1,4 +1,5 @@
 import numpy as np
+from astropy.stats import sigma_clipped_stats
 from photutils.profiles import CurveOfGrowth
 from photutils.segmentation import (
     detect_sources,
@@ -64,23 +65,59 @@ def _extract_single_growth_curve(image, position, radii, error=None, mask=None):
     return cog.radius, cog.profile, perr
 
 
+def _as_positions(sources):
+    """Convert sources (array, Table, or SourceCatalog) to (N, 2) float array."""
+    if isinstance(sources, np.ndarray):
+        arr = np.asarray(sources, dtype=float)
+        if arr.ndim == 2 and arr.shape[1] == 2:
+            return arr
+    # astropy Table-like with x/y columns
+    if hasattr(sources, "colnames"):
+        try:
+            x = np.asarray(sources["x"], dtype=float)
+            y = np.asarray(sources["y"], dtype=float)
+            return np.column_stack([x, y])
+        except (KeyError, TypeError, ValueError, IndexError):
+            pass
+    # photutils SourceCatalog or similar
+    if hasattr(sources, "x_centroid") and hasattr(sources, "y_centroid"):
+        x = np.asarray(sources.x_centroid, dtype=float)
+        y = np.asarray(sources.y_centroid, dtype=float)
+        return np.column_stack([x, y])
+    # fallback: sequence of positions
+    try:
+        arr = np.asarray(sources, dtype=float)
+    except (ValueError, TypeError):
+        raise TypeError(
+            "sources must be an (N,2) ndarray, Table with 'x'/'y', or SourceCatalog"
+        ) from None
+    if arr.ndim == 2 and arr.shape[1] == 2:
+        return arr
+    raise TypeError(
+        "sources must be an (N,2) ndarray, Table with 'x'/'y', or SourceCatalog"
+    )
+
+
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 def extract_growth_curves(
-    image, positions, radii=None, error=None, segmentation_image=None
+    image, sources, radii=None, error=None, segmentation_image=None
 ):
     """Extract circular growth curves for multiple sources.
 
     Parameters
     ----------
     image : 2D `~numpy.ndarray`
-        Image data (should be background-subtracted).
-    positions : 2D `~numpy.ndarray`
-        ``(n_sources, 2)`` array of ``(x, y)`` coordinates.
+        Image data. Background subtraction is optional; a linear background
+        term is modeled during fitting.
+    sources : 2D `~numpy.ndarray`, `~astropy.table.Table`, or `~photutils.segmentation.SourceCatalog`
+        ``(n_sources, 2)`` array of ``(x, y)`` coordinates, or a catalog
+        providing ``x``/``y`` columns or ``x_centroid``/``y_centroid``.
     radii : 1D `~numpy.ndarray` or None
         Aperture radii in pixels. Defaults to 10 logarithmically spaced
         values between 0.5 and 30 pixels.
     error : 2D `~numpy.ndarray` or None
-        Per-pixel 1-sigma error.
+        Per-pixel 1-sigma error. If ``None`` (default), an error map is
+        estimated automatically via sigma-clipped statistics on the image.
     segmentation_image : `~photutils.segmentation.SegmentationImage` or None
         Segmentation map from :func:`detect_and_segment`. If provided,
         contamination from neighboring sources is estimated.
@@ -104,12 +141,17 @@ def extract_growth_curves(
     if radii is None:
         radii = np.logspace(np.log10(3), np.log10(30), num=10)
 
+    positions = _as_positions(sources)
     n_sources = len(positions)
     n_radii = len(radii)
     flux = np.zeros((n_sources, n_radii))
     flux_err = np.zeros((n_sources, n_radii))
     flux_clean = np.zeros((n_sources, n_radii))
     contamination = np.zeros((n_sources, n_radii))
+
+    if error is None:
+        _, bg, std = sigma_clipped_stats(image)
+        error = np.sqrt(np.maximum(image - bg, 0.0) + std**2)
 
     if segmentation_image is not None:
         seg_data = segmentation_image.data
@@ -143,15 +185,16 @@ def extract_growth_curves(
 # pylint: enable=too-many-arguments,too-many-positional-arguments
 
 
-def detect_and_segment(image, background, n_sigma=3.0, n_pixels=10, deblend=True):
+def detect_and_segment(image, background=None, n_sigma=3.0, n_pixels=10, deblend=True):
     """Detect sources and produce a segmentation image.
 
     Parameters
     ----------
     image : 2D `~numpy.ndarray`
         Image data with background included.
-    background : float
-        Background level to subtract.
+    background : float or None
+        Background level to subtract. If ``None`` (default), estimated
+        via :func:`astropy.stats.sigma_clipped_stats`.
     n_sigma : float
         Detection significance threshold (passed to ``detect_threshold``).
     n_pixels : int
@@ -164,6 +207,8 @@ def detect_and_segment(image, background, n_sigma=3.0, n_pixels=10, deblend=True
     segmentation_image: `~photutils.segmentation.SegmentationImage`.
     catalog: `~photutils.segmentation.SourceCatalog`.
     """
+    if background is None:
+        _, background, _ = sigma_clipped_stats(image)
     subtracted = image - background
     threshold = detect_threshold(image, n_sigma=n_sigma, background=background)
     seg = detect_sources(subtracted, threshold, n_pixels=n_pixels)

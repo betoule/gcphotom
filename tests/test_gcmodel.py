@@ -58,6 +58,66 @@ class TestMoffatFunctions:
         annular = gcp.gcmodel.annular_fluxes(cum)
         np.testing.assert_allclose(annular, [0.0, 1.0, 2.0, 3.0, 4.0])
 
+    def test_sigma_fwhm_converters(self):
+        assert gcp.gcmodel.sigma2fwhm(1.0) > 0
+        assert gcp.gcmodel.fwhm2sigma(2.355) > 0
+
+    def test_moffat_and_imoffat(self):
+        assert gcp.gcmodel.moffat(0.0, 2.0, 3.0) > 0
+        # choose a small fraction that yields a real radius
+        r = gcp.gcmodel.imoffat(0.1, 2.0, 3.0)
+        assert np.isfinite(r) and r >= 0
+        assert gcp.gcmodel.moffat_flux(0.0, 2.0, 3.0) == 0.0
+
+    def test_residuals_mask_and_plot(self, small_sim):
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=300)
+        r = f.residuals(bf, mask=True)
+        assert r.shape[0] > 0
+        # non-masked path
+        r2 = f.residuals(bf, mask=False)
+        assert r2.shape == r.shape
+        # weighted mask path
+        wr = f.weighted_residuals(bf, mask=True)
+        assert wr.shape[0] > 0
+        # plot with provided axes
+        import matplotlib.pyplot as plt
+
+        fig, (ax1, ax2) = plt.subplots(2, 1)
+        f.plot_PSF(bf, axes=(ax1, ax2))
+        plt.close(fig)
+
+    def test_fit_raises_on_zero_sources(self):
+        from gcphotom.gcmodel import Fitter
+
+        gc0 = {
+            "radius": np.array([1.0, 2.0]),
+            "flux": np.zeros((0, 2)),
+            "flux_err": np.zeros((0, 2)),
+            "flux_clean": np.zeros((0, 2)),
+            "contamination": np.zeros((0, 2)),
+        }
+        f = Fitter(gc0)
+        with pytest.raises(ValueError):
+            f.fit(niter=1)
+
+    def test_fit_show_plots(self, small_sim):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=100, show=True)
+        assert bf is not None
+        plt.close("all")
+
 
 class TestFitterInit:
     def test_init_shapes(self, small_sim):
@@ -155,6 +215,8 @@ class TestFitterResults:
         assert res["back"].shape[0] == n
         assert res["ngoods"].shape[0] == n
         assert res["chi2"].shape[0] == n
+        # results are expanded to original input length
+        assert n == len(positions)
 
 
 class TestFitterHelpers:
@@ -168,6 +230,23 @@ class TestFitterHelpers:
         f.detect_contamination(bf)
         goods_after = int(f.goods.sum())
         assert goods_after <= goods_before
+
+    def test_results_expanded_with_nans_after_contamination(self, small_sim):
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=1000)
+        res_before = f.results(bf)
+        n_before = len(positions)
+        assert len(res_before["flux"]) == n_before
+        f.detect_contamination(bf)
+        # results uses current .kept to expand; we call with prior bf
+        res_after = f.results(bf)
+        assert len(res_after["flux"]) == n_before
+        # some entries may be NaN where sources were dropped
+        if int(f.goods.sum()) < n_before:
+            assert np.any(~np.isfinite(res_after["flux"]))
 
     def test_plot_psf_returns_axes(self, small_sim):
         img, cat = small_sim

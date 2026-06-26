@@ -27,47 +27,36 @@ uv sync --all-extras --dev
 # Quick Start
 
 ```python
-import numpy as np
 import gcphotom as gcp
+import matplotlib.pyplot as plt
 
 # 1. Simulate a realistic astronomical image
-background = 100
-read_noise = 5
-image, catalog = gcp.simulate_image(background=background, read_noise=read_noise)
+image, sim_cat = gcp.simulate_image(background=100, read_noise=5)
 
-# 2. Detect sources and build segmentation image
-seg, cat = gcp.detect_and_segment(image, background=background)
-positions = np.column_stack([cat.x_centroid, cat.y_centroid])
+# 2. Detect sources and build segmentation image (now takes care of background estimation)
+seg, det_cat = gcp.detect_and_segment(image)
 
-# 3. Compute per-pixel error estimate
-error = gcp.estimate_error(image, read_noise=read_noise)
-
-# 4. Extract growth curves with contamination estimation
-result = gcp.extract_growth_curves(
+# 3. Extract growth curves with contamination estimation (takes care of error estimation)
+cog = gcp.extract_growth_curves(
     image,
-    positions,
-    error=error,
-    segmentation_image=seg,
+    det_cat,
+    segmentation_image=seg
 )
 
-# 5. Fit all growth curves with a common Moffat profile
-fitter = gcp.Fitter(result)
-best_params, extra = fitter.fit()
+# 4. Fit all growth curves
+fitter = gcp.Fitter(cog)
+best_fit, extra = fitter.fit()
+fitted = fitter.results(best_fit)
 
-# 6. Match detected sources back to the input catalog
-input_pos = np.column_stack([catalog["x"], catalog["y"]])
-match = gcp.cross_match(input_pos, positions)
-fitted = fitter.results(best_params)
-matched = match["match_indices"] >= 0
-matched_flux = fitted["flux"][match["match_indices"][matched]]
+# 5. Match (return the matched reordered version of the sim_cat)
+input_cat = gcp.cross_match(det_cat, sim_cat)
 
-# 7. Inspect results
+# 6. Inspect results
 print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
-print(f"Recovered / injected flux: {matched_flux[:5]} / {catalog['flux'][matched][:5]}")
-print(f"Contamination: {result['contamination'][:, -1][match['match_indices'][matched][:5]]}")
+plt.plot(input_cat['flux'], fitted['flux'] / input_cat['flux'], 'o')
 ```
 
-The `segmentation_image` and `labels` parameters enable contamination estimation by masking out neighboring sources. The result always includes `flux_clean` and `contamination`. When no segmentation is provided, `flux_clean` equals `flux` and `contamination` is zero.
+The `segmentation_image` enables contamination estimation by masking out neighboring sources. The result always includes `flux_clean` and `contamination`. When no segmentation is provided, `flux_clean` equals `flux` and `contamination` is zero. Cross-matching detected and simulated catalogs returns a matched table of the same length as the detected catalog (NaNs for unmatched). `Fitter.results` always returns per-source arrays aligned to the original input length (NaNs for internally dropped sources).
 
 # Why gcphotom?
 

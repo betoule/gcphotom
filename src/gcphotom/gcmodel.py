@@ -105,6 +105,7 @@ class Fitter:
         self.model = model
         self.estimate = None
         n = len(gc_result["flux"])
+        self._orig_n = n
         self.kept = np.ones(n, dtype=bool)
         self._set_data(gc_result)
         self._cut()
@@ -319,16 +320,109 @@ class Fitter:
         Returns
         -------
         dict with keys ``flux``, ``back``, ``gamma``, ``alpha``, ``ngoods``, ``chi2``.
+        Per-source arrays (flux, back, ngoods, chi2) have length equal to the
+        original number of sources passed to extract_growth_curves. Dropped
+        sources (via internal cuts or detect_contamination) are represented
+        by NaN.
         """
-        par = self._flux(bf)
+        n = getattr(self, "_orig_n", 0)
+        n_cur = (
+            int(self.fluxes.shape[1])
+            if getattr(self, "fluxes", None) is not None
+            else 0
+        )
+        kept = np.asarray(self.kept)
+
+        if n_cur == 0:
+            full = lambda: np.full(n, np.nan)
+            g = (
+                float(bf.get("gamma", np.nan))
+                if isinstance(bf, dict)
+                else float(getattr(bf, "gamma", np.nan))
+            )
+            a = (
+                float(bf.get("alpha", np.nan))
+                if isinstance(bf, dict)
+                else float(getattr(bf, "alpha", np.nan))
+            )
+            return {
+                "flux": full(),
+                "back": full(),
+                "gamma": g,
+                "alpha": a,
+                "ngoods": full(),
+                "chi2": full(),
+            }
+
+        # safe unit vectors matching current kept count
+        unit = np.asarray(
+            bf.get("flux", np.ones(n_cur)) if isinstance(bf, dict) else np.ones(n_cur),
+            dtype=float,
+        )
+        if len(unit) != n_cur:
+            unit = np.ones(n_cur)
+        bck = np.asarray(
+            (
+                bf.get("back", np.zeros(n_cur))
+                if isinstance(bf, dict)
+                else np.zeros(n_cur)
+            ),
+            dtype=float,
+        )
+        if len(bck) != n_cur:
+            bck = np.zeros(n_cur)
+
+        est = np.asarray(self.estimate) if self.estimate is not None else np.ones(n_cur)
+        if len(est) != n_cur:
+            est = np.ones(n_cur)
+
+        red_flux = unit * est
+        red_back = bck
+
+        # compute ngoods/chi2 using current internal state + consistent tmp bf
+        tmp_bf = {
+            "flux": unit,
+            "back": bck,
+            "gamma": (
+                bf.get("gamma", 3.0)
+                if isinstance(bf, dict)
+                else getattr(bf, "gamma", 3.0)
+            ),
+            "alpha": (
+                bf.get("alpha", 3.0)
+                if isinstance(bf, dict)
+                else getattr(bf, "alpha", 3.0)
+            ),
+        }
         ngoods = self.goods.sum(axis=0)
-        wr = self.weighted_residuals(bf, mask=True)
+        wr = self.weighted_residuals(tmp_bf, mask=True)
         chi2 = np.nansum(wr**2, axis=0)
+
+        full_flux = np.full(n, np.nan)
+        full_back = np.full(n, np.nan)
+        full_ng = np.full(n, np.nan)
+        full_chi = np.full(n, np.nan)
+        if np.any(kept):
+            full_flux[kept] = red_flux
+            full_back[kept] = red_back
+            full_ng[kept] = ngoods
+            full_chi[kept] = chi2
+
+        g = (
+            float(bf.get("gamma", np.nan))
+            if isinstance(bf, dict)
+            else float(getattr(bf, "gamma", np.nan))
+        )
+        a = (
+            float(bf.get("alpha", np.nan))
+            if isinstance(bf, dict)
+            else float(getattr(bf, "alpha", np.nan))
+        )
         return {
-            "flux": np.array(par["flux"]),
-            "back": np.array(par["back"]),
-            "gamma": float(bf["gamma"]),
-            "alpha": float(bf["alpha"]),
-            "ngoods": np.array(ngoods),
-            "chi2": np.array(chi2),
+            "flux": full_flux,
+            "back": full_back,
+            "gamma": g,
+            "alpha": a,
+            "ngoods": full_ng,
+            "chi2": full_chi,
         }

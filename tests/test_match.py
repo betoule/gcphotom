@@ -115,3 +115,61 @@ class TestCrossMatchWrapper:
         det = np.array([[0.0, 0.0]])
         res = gcp.cross_match(inp, det, tolerance=1.0)
         np.testing.assert_array_equal(res["match_indices"], [0, 0])
+
+    def test_sky_project_path(self):
+        # exercise project=True path inside match (used by cross_match catalog when non-xy)
+        ref = {"ra": np.array([0.0, 10.0]), "dec": np.array([0.0, 0.0])}
+        cat = {"ra": np.array([0.0]), "dec": np.array([0.0])}
+        idx = gcp.match.match(ref, cat, project=True, radius=0.1)
+        np.testing.assert_array_equal(idx, [0])
+
+    def test_match_empty_ref_xy(self):
+        ref = {"x": np.array([]), "y": np.array([])}
+        cat = {"x": np.array([0.0]), "y": np.array([0.0])}
+        idx = gcp.match.match(ref, cat, project=False, xy=True, radius=1.0)
+        np.testing.assert_array_equal(idx, [-1])
+
+    def test_match_spherical_haversine(self):
+        ref = {"ra": np.array([0.0]), "dec": np.array([0.0])}
+        cat = {"ra": np.array([0.0]), "dec": np.array([0.0])}
+        idx = gcp.match.match(ref, cat, project=False, xy=False, radius=0.1)
+        np.testing.assert_array_equal(idx, [0])
+
+
+class TestCrossMatchCatalogs:
+    def test_catalog_length_preserved_with_nans(self):
+        from astropy.table import Table
+
+        det = Table({"x": [50.1, 100.1], "y": [50.2, 100.1]})
+        sim = Table({"x": [50.0, 200.0], "y": [50.0, 200.0], "flux": [100.0, 200.0]})
+        res = gcp.cross_match(det, sim, tolerance=5.0)
+        assert len(res) == len(det)
+        assert "flux" in res.colnames
+        assert np.isfinite(res["flux"][0])
+        assert not np.isfinite(res["flux"][1])
+
+    def test_catalog_order_follows_det(self):
+        from astropy.table import Table
+
+        det = Table({"x": [100.0, 50.0], "y": [100.0, 50.0]})
+        sim = Table({"x": [50.0, 100.0], "y": [50.0, 100.0], "id": [1, 2]})
+        res = gcp.cross_match(det, sim, tolerance=1.0)
+        np.testing.assert_array_equal(res["id"], [2, 1])
+
+    def test_catalog_empty_det(self):
+        from astropy.table import Table
+
+        det = Table({"x": [], "y": []})
+        sim = Table({"x": [0.0], "y": [0.0], "flux": [10.0]})
+        res = gcp.cross_match(det, sim)
+        assert len(res) == 0
+        assert "flux" in res.colnames
+
+    def test_catalog_no_matches(self):
+        from astropy.table import Table
+
+        det = Table({"x": [0.0], "y": [0.0]})
+        sim = Table({"x": [100.0], "y": [100.0], "flux": [99.0]})
+        res = gcp.cross_match(det, sim, tolerance=1.0)
+        assert len(res) == 1
+        assert not np.isfinite(res["flux"][0])

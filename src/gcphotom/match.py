@@ -1,5 +1,7 @@
 import numpy as np
 
+from astropy.table import Table
+
 
 def _euclidean(x1, y1, x2, y2):
     """Euclidean distance between points or arrays of points."""
@@ -267,41 +269,105 @@ def match(refcat, cat, project=True, xy=False, radius=1.0, compute_distances=Fal
     return idx, dist
 
 
-def cross_match(input_positions, detected_positions, tolerance=5.0):
-    """Match input positions to detected positions (efficient implementation).
+def _get_xy(obj):
+    """Extract (x, y) arrays from ndarray, Table, or SourceCatalog-like object."""
+    if isinstance(obj, np.ndarray):
+        arr = np.asarray(obj, dtype=float)
+        if arr.ndim == 2 and arr.shape[1] == 2:
+            return arr[:, 0], arr[:, 1]
+    if hasattr(obj, "colnames"):
+        try:
+            x = np.asarray(obj["x"], dtype=float)
+            y = np.asarray(obj["y"], dtype=float)
+            return x, y
+        except Exception:
+            pass
+    if hasattr(obj, "x_centroid") and hasattr(obj, "y_centroid"):
+        x = np.asarray(obj.x_centroid, dtype=float)
+        y = np.asarray(obj.y_centroid, dtype=float)
+        return x, y
+    arr = np.asarray(obj, dtype=float)
+    if arr.ndim == 2 and arr.shape[1] == 2:
+        return arr[:, 0], arr[:, 1]
+    raise TypeError("Cannot extract (x, y) positions from input")
 
-    Parameters
-    ----------
-    input_positions : (N, 2) ndarray
-        Query positions (e.g. true coordinates). Each row is (x, y) or (ra, dec) ?
-        This wrapper assumes pixel-like cartesian coordinates (same as before).
-    detected_positions : (M, 2) ndarray
-        Reference positions to search in.
-    tolerance : float
-        Max distance for a valid match (same units as coordinates).
 
-    Returns
-    -------
-    dict
-        ``match_indices`` : (N,) int, index into detected or -1
-        ``match_distances`` : (N,) float, distance or +inf
+def cross_match(a, b, tolerance=5.0):
+    """Match positions or catalogs.
+
+    Dispatch based on input types:
+
+    - If both ``a`` and ``b`` are (N,2) ndarrays: legacy behavior.
+      Returns dict with ``match_indices`` and ``match_distances``.
+      Semantics: for each row in ``a``, index into ``b`` (or -1).
+
+    - Otherwise: catalog-oriented matching.
+      ``a`` provides query positions (e.g. detected catalog),
+      ``b`` is the reference catalog to reorder (e.g. simulated truth).
+      Returns an :class:`~astropy.table.Table` of length ``len(a)``,
+      containing columns from ``b`` reordered so that row ``i`` in the
+      result corresponds to the ``i``-th entry in ``a``. Unmatched entries
+      are filled with ``NaN`` (numeric columns) or ``None`` (others).
     """
-    input_positions = np.asarray(input_positions, dtype=float)
-    detected_positions = np.asarray(detected_positions, dtype=float)
-    n_in = len(input_positions)
-    if n_in == 0:
-        return {
-            "match_indices": np.array([], dtype=int),
-            "match_distances": np.array([], dtype=float),
-        }
-    if len(detected_positions) == 0:
-        return {
-            "match_indices": np.full(n_in, -1, dtype=int),
-            "match_distances": np.full(n_in, np.inf),
-        }
-    ref = {"x": detected_positions[:, 0], "y": detected_positions[:, 1]}
-    qry = {"x": input_positions[:, 0], "y": input_positions[:, 1]}
-    idx, dist = match(
+
+    # Legacy array path
+    def _looks_like_pos(x):
+        try:
+            arr = np.asarray(x, dtype=float)
+            return arr.ndim == 2 and arr.shape[1] == 2
+        except Exception:
+            return False
+
+    if _looks_like_pos(a) and _looks_like_pos(b):
+        ap = np.asarray(a, dtype=float)
+        bp = np.asarray(b, dtype=float)
+        n_in = len(ap)
+        if n_in == 0:
+            return {
+                "match_indices": np.array([], dtype=int),
+                "match_distances": np.array([], dtype=float),
+            }
+        if len(bp) == 0:
+            return {
+                "match_indices": np.full(n_in, -1, dtype=int),
+                "match_distances": np.full(n_in, np.inf),
+            }
+        ref = {"x": bp[:, 0], "y": bp[:, 1]}
+        qry = {"x": ap[:, 0], "y": ap[:, 1]}
+        idx, dist = match(
+            ref,
+            qry,
+            project=False,
+            xy=True,
+            radius=float(tolerance),
+            compute_distances=True,
+        )
+        return {"match_indices": idx, "match_distances": dist}
+
+    # Catalog-oriented path: a=det (query), b=sim (ref catalog)
+    dx, dy = _get_xy(a)
+    sx, sy = _get_xy(b)
+    n = len(dx)
+    if n == 0:
+        # return empty table with same columns as b if possible
+        if hasattr(b, "colnames"):
+            return Table({c: np.array([], dtype=float) for c in b.colnames})
+        return Table()
+    if len(sx) == 0:
+        if hasattr(b, "colnames"):
+            cols = {}
+            for c in b.colnames:
+                arr = np.asarray(b[c])
+                if np.issubdtype(arr.dtype, np.number):
+                    cols[c] = np.full(n, np.nan, dtype=float)
+                else:
+                    cols[c] = np.array([None] * n, dtype=object)
+            return Table(cols)
+        return Table()
+
+    ref = {"x": sx, "y": sy}
+    qry = {"x": dx, "y": dy}
+    idx, _ = match(
         ref,
         qry,
         project=False,
@@ -309,4 +375,23 @@ def cross_match(input_positions, detected_positions, tolerance=5.0):
         radius=float(tolerance),
         compute_distances=True,
     )
-    return {"match_indices": idx, "match_distances": dist}
+
+    if hasattr(b, "colnames"):
+        cols = {}
+        for c in b.colnames:
+            arr = np.asarray(b[c])
+            if np.issubdtype(arr.dtype, np.number):
+                out = np.full(n, np.nan, dtype=float)
+                good = idx >= 0
+                out[good] = arr[idx[good]]
+                cols[c] = out
+            else:
+                out = np.empty(n, dtype=object)
+                out[:] = None
+                good = idx >= 0
+                out[good] = arr[idx[good]]
+                cols[c] = out
+        return Table(cols)
+
+    # Fallback: if b had no columns (e.g. raw positions passed oddly), return indices style
+    return {"match_indices": idx, "match_distances": np.full(n, np.inf)}
