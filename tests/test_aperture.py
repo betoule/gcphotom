@@ -1,4 +1,3 @@
-import importlib.util
 import numpy as np
 import pytest
 from astropy.table import Table
@@ -165,6 +164,7 @@ class TestDetectAndSegment:
         dists = np.sqrt(np.sum((positions - input_positions) ** 2, axis=1))
         assert np.all(dists < 1.0)
 
+
 class TestExtractGrowthCurvesWithSegmentation:
     def test_returns_contamination_keys(self, controlled_catalog):
         img = controlled_catalog([(100, 100)])
@@ -182,7 +182,9 @@ class TestExtractGrowthCurvesWithSegmentation:
         img = controlled_catalog([(100, 100)])
         sub = img - 100
         seg, cat = detect_and_segment(img, background=100)
-        result = extract_growth_curves(sub, np.column_stack([cat.x_centroid, cat.y_centroid]))
+        result = extract_growth_curves(
+            sub, np.column_stack([cat.x_centroid, cat.y_centroid])
+        )
         assert "contamination" not in result
         assert "flux_clean" not in result
 

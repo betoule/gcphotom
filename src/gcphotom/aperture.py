@@ -7,6 +7,8 @@ from photutils.segmentation import (
     SourceCatalog,
 )
 
+from .match import cross_match as _cross_match  # re-export for backward compat
+
 
 def estimate_error(image, background, read_noise):
     """Compute per-pixel error estimate.
@@ -183,9 +185,10 @@ def detect_and_segment(image, background, n_sigma=3.0, n_pixels=10, deblend=True
     return seg, catalog
 
 
-
 def cross_match(input_positions, detected_positions, tolerance=5.0):
     """Match input positions to detected positions by nearest neighbor.
+
+    Efficient grid-binned implementation (see :mod:`gcphotom.match`).
 
     Parameters
     ----------
@@ -206,18 +209,4 @@ def cross_match(input_positions, detected_positions, tolerance=5.0):
         * ``match_distances``: 1D array of floats. Distance in pixels
           (or ``inf`` if unmatched).
     """
-    n_input = len(input_positions)
-    match_indices = np.full(n_input, -1, dtype=int)
-    match_distances = np.full(n_input, np.inf)
-
-    for i, pos in enumerate(input_positions):
-        dists = np.sqrt(np.sum((detected_positions - pos) ** 2, axis=1))
-        idx = np.argmin(dists)
-        if dists[idx] <= tolerance:
-            match_indices[i] = idx
-            match_distances[i] = dists[idx]
-
-    return {
-        "match_indices": match_indices,
-        "match_distances": match_distances,
-    }
+    return _cross_match(input_positions, detected_positions, tolerance=tolerance)

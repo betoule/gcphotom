@@ -9,7 +9,13 @@ from gcphotom.aperture import (
     extract_growth_curves,
 )
 from gcphotom.gcmodel import Fitter
-from gcphotom.simulator import make_realistic_source_catalog, simulate_image, make_test_source_catalog
+from gcphotom.simulator import (
+    make_realistic_source_catalog,
+    simulate_image,
+    make_test_source_catalog,
+)
+
+from . import match  # public submodule
 
 __all__ = [
     "cross_match",
@@ -19,5 +25,6 @@ __all__ = [
     "Fitter",
     "make_realistic_source_catalog",
     "make_test_source_catalog",
+    "match",
     "simulate_image",
 ]
