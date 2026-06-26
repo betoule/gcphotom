@@ -53,9 +53,9 @@ class TestMoffatFunctions:
         gamma = gcp.gcmodel.fwhm2gamma(fwhm, alpha)
         assert gcp.gcmodel.gamma2fwhm(gamma, alpha) == pytest.approx(fwhm)
 
-    def test_flux_and_couronnes(self):
+    def test_annular_fluxes(self):
         cum = np.array([0.0, 1.0, 3.0, 6.0, 10.0])
-        annular = gcp.gcmodel.flux_and_couronnes(cum)
+        annular = gcp.gcmodel.annular_fluxes(cum)
         np.testing.assert_allclose(annular, [0.0, 1.0, 2.0, 3.0, 4.0])
 
 

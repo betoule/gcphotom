@@ -43,7 +43,7 @@ def imoffat(x, gamma, alpha):
     return jnp.sqrt((x * jnp.pi * gamma**2 / (alpha - 1)) ** (-1 / alpha) - 1) * gamma
 
 
-def flux_and_couronnes(x):
+def annular_fluxes(x):
     """Compute annular fluxes: diff of cumulative flux along axis 0."""
     return jnp.diff(x, prepend=0, axis=0)
 
@@ -100,7 +100,7 @@ class Fitter:
             model = moffat_model
 
         self.radii = jnp.array(gc_result["radius"])
-        self.areas = flux_and_couronnes(self.radii**2 * jnp.pi)
+        self.areas = annular_fluxes(self.radii**2 * jnp.pi)
         self.model = model
         self.estimate = None
         n = len(gc_result["flux"])
@@ -115,9 +115,9 @@ class Fitter:
         (n_radii, n_sources) to match the model convention.
         """
         cum_flux = jnp.array(gc_result["flux_clean"]).T
-        self.fluxes = flux_and_couronnes(cum_flux)
+        self.fluxes = annular_fluxes(cum_flux)
         var_cum = jnp.array(gc_result["flux_err"]).T ** 2
-        self.var = flux_and_couronnes(var_cum)
+        self.var = annular_fluxes(var_cum)
         self.var = jnp.clip(self.var, 1e-30, None)
         self.goods = jnp.isfinite(self.fluxes) & jnp.isfinite(self.var)
 
@@ -139,14 +139,14 @@ class Fitter:
     def residuals(self, params, mask=False):
         """Annular residuals: data - model."""
         m = self.model(self._flux(params), self.radii)
-        r = self.fluxes - flux_and_couronnes(m)
+        r = self.fluxes - annular_fluxes(m)
         if mask:
             return r.at[~self.goods].set(jnp.nan)
         return r
 
     def weighted_residuals(self, params, mask=False):
         """Weighted annular residuals."""
-        m = flux_and_couronnes(self.model(self._flux(params), self.radii))
+        m = annular_fluxes(self.model(self._flux(params), self.radii))
         residuals = self.fluxes - m
         noise = m
         r = residuals / jnp.sqrt(noise) * self.goods
@@ -215,7 +215,9 @@ class Fitter:
         ac = float(jnp.nanmedian(f_outer / f_inner))
         estimate = f_inner * ac
         self.estimate = estimate
-        self.background_estimate = (self.fluxes[-1, :] - self.fluxes[-2, :]) / (jnp.pi * (self.radii[-1]**2 - self.radii[-2]**2))
+        self.background_estimate = (self.fluxes[-1, :] - self.fluxes[-2, :]) / (
+            jnp.pi * (self.radii[-1] ** 2 - self.radii[-2] ** 2)
+        )
         gamma_est = 3.0  # self._estimate_gamma(estimate * ac, alpha)
 
         return {
@@ -287,7 +289,7 @@ class Fitter:
 
         ax1.plot(
             self.radii,
-            flux_and_couronnes(
+            annular_fluxes(
                 self.model(
                     {**bf, "flux": np.array([1.0]), "back": np.array([0.0])},
                     self.radii,
