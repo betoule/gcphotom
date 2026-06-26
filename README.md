@@ -40,11 +40,11 @@ seg, cat = gcp.detect_and_segment(image, background=background)
 positions = np.column_stack([cat.x_centroid, cat.y_centroid])
 
 # 3. Compute per-pixel error estimate
-error = gcp.estimate_error(image, background=background, read_noise=read_noise)
+error = gcp.estimate_error(image, read_noise=read_noise)
 
 # 4. Extract growth curves with contamination estimation
 result = gcp.extract_growth_curves(
-    image - background,
+    image,
     positions,
     error=error,
     segmentation_image=seg,

@@ -84,6 +84,15 @@ class Fitter:
     model : callable, optional
         Model function ``f(params, radii) -> cumulative_flux``.
         Defaults to :func:`moffat_model`.
+
+    Attributes
+    ----------
+    kept : ndarray of bool
+        Boolean mask of length equal to the number of sources passed to
+        ``extract_growth_curves`` (i.e., original input length). ``True`` for
+        sources that survived all cuts up to the last ``results`` or
+        ``detect_contamination`` call. Use to align fitted results back to
+        the input order when sources have been dropped.
     """
 
     def __init__(self, gc_result, model=None):
@@ -94,6 +103,8 @@ class Fitter:
         self.areas = flux_and_couronnes(self.radii**2 * jnp.pi)
         self.model = model
         self.estimate = None
+        n = len(gc_result["flux"])
+        self.kept = np.ones(n, dtype=bool)
         self._set_data(gc_result)
         self._cut()
 
@@ -103,7 +114,7 @@ class Fitter:
         gc_result["flux"] has shape (n_sources, n_radii); we transpose to
         (n_radii, n_sources) to match the model convention.
         """
-        cum_flux = jnp.array(gc_result["flux"]).T
+        cum_flux = jnp.array(gc_result["flux_clean"]).T
         self.fluxes = flux_and_couronnes(cum_flux)
         var_cum = jnp.array(gc_result["flux_err"]).T ** 2
         self.var = flux_and_couronnes(var_cum)
@@ -112,7 +123,11 @@ class Fitter:
 
     def _cut(self):
         """Remove sources with fewer than 2 good data points."""
-        valid = self.goods.sum(axis=0) > 1
+        valid = np.asarray(self.goods.sum(axis=0) > 1)
+        self.kept = np.asarray(self.kept)
+        self.kept[self.kept] = valid
+        if getattr(self, "estimate", None) is not None:
+            self.estimate = np.asarray(self.estimate)[valid]
         self.fluxes = self.fluxes[:, valid]
         self.var = self.var[:, valid]
         self.goods = self.goods[:, valid]
@@ -133,8 +148,8 @@ class Fitter:
         """Weighted annular residuals."""
         m = flux_and_couronnes(self.model(self._flux(params), self.radii))
         residuals = self.fluxes - m
-        noise = m * 0.01
-        r = residuals / jnp.sqrt(self.var + noise**2) * self.goods
+        noise = m
+        r = residuals / jnp.sqrt(noise) * self.goods
         if mask:
             return r.at[~self.goods].set(jnp.nan)
         return r
@@ -164,6 +179,8 @@ class Fitter:
         extra : dict
             Contains ``loss`` and ``timings`` arrays.
         """
+        if self.fluxes.shape[1] == 0:
+            raise ValueError("No sources remaining with sufficient data points to fit.")
         if initial_guess is None:
             initial_guess = self.initial_guess()
 
@@ -178,9 +195,18 @@ class Fitter:
     def initial_guess(self, alpha=3.0):
         """Heuristic initial parameter guess.
 
-        Estimates total flux from inner aperture scaling, and gamma from
+                Estimates total flux from inner aperture scaling, and gamma from
         the 50%-flux radius of each growth curve.
         """
+        nsrc = self.fluxes.shape[1]
+        if nsrc == 0:
+            self.estimate = jnp.array([], dtype=float)
+            return {
+                "gamma": 3.0,
+                "alpha": alpha,
+                "flux": jnp.array([]),
+                "back": jnp.array([]),
+            }
         n_radii = self.fluxes.shape[0]
         a1 = max(2, n_radii // 5)
         a2 = max(5, n_radii // 2)
@@ -189,14 +215,14 @@ class Fitter:
         ac = float(jnp.nanmedian(f_outer / f_inner))
         estimate = f_inner * ac
         self.estimate = estimate
-
+        self.background_estimate = (self.fluxes[-1, :] - self.fluxes[-2, :]) / (jnp.pi * (self.radii[-1]**2 - self.radii[-2]**2))
         gamma_est = 3.0  # self._estimate_gamma(estimate * ac, alpha)
 
         return {
             "gamma": gamma_est,
             "alpha": alpha,
-            "flux": jnp.ones(self.fluxes.shape[1]),
-            "back": jnp.zeros(self.fluxes.shape[1]),
+            "flux": jnp.ones(nsrc),
+            "back": self.background_estimate,
         }
 
     def _estimate_gamma(self, total_flux, alpha):

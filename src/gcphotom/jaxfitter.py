@@ -44,7 +44,7 @@ def fit_adam(
     niter: int
         maximum number of iterations
 
-    tol: float
+    tol: None or float
         targeted func variations below which the iteration will stop
 
     **kwargs other func entries
