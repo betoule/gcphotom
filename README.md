@@ -67,7 +67,7 @@ print(f"Recovered / injected flux: {matched_flux[:5]} / {catalog['flux'][matched
 print(f"Contamination: {result['contamination'][:, -1][match['match_indices'][matched][:5]]}")
 ```
 
-The `segmentation_image` and `labels` parameters enable contamination estimation by masking out neighboring sources. The result includes `flux_clean` (flux with neighbors masked) and `contamination` (absolute contaminating flux).
+The `segmentation_image` and `labels` parameters enable contamination estimation by masking out neighboring sources. The result always includes `flux_clean` and `contamination`. When no segmentation is provided, `flux_clean` equals `flux` and `contamination` is zero.
 
 # Why gcphotom?
 

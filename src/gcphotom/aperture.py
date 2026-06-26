@@ -95,11 +95,11 @@ def extract_growth_curves(
         * ``flux_err``: 2D array ``(n_sources, n_radii)`` of flux
           uncertainties.
         * ``flux_clean``: 2D array ``(n_sources, n_radii)`` of flux with
-          neighboring sources masked. Present only if ``segmentation_image``
-          is provided.
+          neighboring sources masked. When ``segmentation_image`` is not
+          provided, ``flux_clean`` is identical to ``flux``.
         * ``contamination``: 2D array ``(n_sources, n_radii)`` of
-          contaminating flux (``flux - flux_clean``). Present only if
-          ``segmentation_image`` is provided.
+          contaminating flux (``flux - flux_clean``). When no segmentation
+          is provided, this is an array of zeros.
     """
     if radii is None:
         radii = np.logspace(np.log10(3), np.log10(30), num=10)
@@ -108,9 +108,10 @@ def extract_growth_curves(
     n_radii = len(radii)
     flux = np.zeros((n_sources, n_radii))
     flux_err = np.zeros((n_sources, n_radii))
+    flux_clean = np.zeros((n_sources, n_radii))
+    contamination = np.zeros((n_sources, n_radii))
 
     if segmentation_image is not None:
-        flux_clean = np.zeros((n_sources, n_radii))
         seg_data = segmentation_image.data
 
     for i, pos in enumerate(positions):
@@ -126,17 +127,17 @@ def extract_growth_curves(
                 image, pos, radii, mask=mask
             )
             flux_clean[i] = clean_profile
+            contamination[i] = profile - clean_profile
+        else:
+            flux_clean[i] = profile
 
-    result = {
+    return {
         "radius": radii,
         "flux": flux,
         "flux_err": flux_err,
+        "flux_clean": flux_clean,
+        "contamination": contamination,
     }
-    if segmentation_image is not None:
-        result["flux_clean"] = flux_clean
-        result["contamination"] = flux - flux_clean
-
-    return result
 
 
 # pylint: enable=too-many-arguments,too-many-positional-arguments

@@ -178,15 +178,17 @@ class TestExtractGrowthCurvesWithSegmentation:
         assert "contamination" in result
         assert "flux_clean" in result
 
-    def test_without_segmentation_no_contamination(self, controlled_catalog):
+    def test_without_segmentation_clean_equals_total(self, controlled_catalog):
         img = controlled_catalog([(100, 100)])
         sub = img - 100
         seg, cat = detect_and_segment(img, background=100)
         result = extract_growth_curves(
             sub, np.column_stack([cat.x_centroid, cat.y_centroid])
         )
-        assert "contamination" not in result
-        assert "flux_clean" not in result
+        assert "flux_clean" in result
+        assert "contamination" in result
+        np.testing.assert_allclose(result["flux_clean"], result["flux"])
+        np.testing.assert_allclose(result["contamination"], 0)
 
     def test_isolated_source_low_contamination(self, controlled_catalog):
         img = controlled_catalog([(128, 128)])

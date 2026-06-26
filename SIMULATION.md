@@ -67,14 +67,18 @@ Extract circular growth curves for each source position:
 1. For each `(x, y)` in `positions`:
    - `photutils.profiles.CurveOfGrowth(image, (x, y), radii, error=error)`
    - Collect `profile` (cumulative flux), `profile_error`, `radius`
-2. **Return**: A dict with:
-   ```python
-   {
-       "radius": ndarray,           # shape (n_radii,)
-       "flux": ndarray,             # shape (n_sources, n_radii)
-       "flux_err": ndarray,         # shape (n_sources, n_radii)
-   }
-   ```
+  2. **Return**: A dict with:
+    ```python
+    {
+        "radius": ndarray,           # shape (n_radii,)
+        "flux": ndarray,             # shape (n_sources, n_radii)
+        "flux_err": ndarray,         # shape (n_sources, n_radii)
+        "flux_clean": ndarray,       # shape (n_sources, n_radii)
+        "contamination": ndarray,    # shape (n_sources, n_radii)
+    }
+    ```
+    When no segmentation image is provided, `flux_clean` is identical to
+    `flux` and `contamination` is an array of zeros.
 
 ### `extract_single_growth_curve(image, position, radii, error=None)`
 

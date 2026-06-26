@@ -79,8 +79,9 @@ class Fitter:
     Parameters
     ----------
     gc_result : dict
-        Output of :func:`gcphotom.aperture.extract_growth_curves`, with keys
-        ``radius``, ``flux``, and ``flux_err``.
+        Output of :func:`gcphotom.aperture.extract_growth_curves`, which always
+        contains ``radius``, ``flux``, ``flux_err``, ``flux_clean``, and
+        ``contamination``. The fitter uses ``flux_clean`` for the data to fit.
     model : callable, optional
         Model function ``f(params, radii) -> cumulative_flux``.
         Defaults to :func:`moffat_model`.
@@ -111,7 +112,7 @@ class Fitter:
     def _set_data(self, gc_result):
         """Extract annular fluxes and variances from cumulative growth curves.
 
-        gc_result["flux"] has shape (n_sources, n_radii); we transpose to
+        gc_result["flux_clean"] has shape (n_sources, n_radii); we transpose to
         (n_radii, n_sources) to match the model convention.
         """
         cum_flux = jnp.array(gc_result["flux_clean"]).T
@@ -148,7 +149,7 @@ class Fitter:
         """Weighted annular residuals."""
         m = annular_fluxes(self.model(self._flux(params), self.radii))
         residuals = self.fluxes - m
-        noise = m
+        noise = jnp.maximum(m, 1e-30)
         r = residuals / jnp.sqrt(noise) * self.goods
         if mask:
             return r.at[~self.goods].set(jnp.nan)
