@@ -4,7 +4,9 @@ from astropy.table import Table
 from photutils.datasets import apply_poisson_noise, make_model_image
 
 
-def make_realistic_source_catalog(n_sources=1000, shape=(1024, 1024), margin=20, seed=None):
+def make_realistic_source_catalog(
+    n_sources=1000, shape=(1024, 1024), margin=20, seed=None
+):
     """Generate a realistic source catalog.
 
     Parameters
@@ -38,11 +40,12 @@ def make_realistic_source_catalog(n_sources=1000, shape=(1024, 1024), margin=20,
 
     return catalog
 
+
 def make_test_source_catalog(n_sources_side=4, shape=(128, 128), fmin=100, fmax=1e6):
     """Generate a source catalog for test purposes.
 
     The sources are regularly spaced on the focal plane.
-    
+
     Parameters
     ----------
     n_sources_side : int
@@ -59,11 +62,11 @@ def make_test_source_catalog(n_sources_side=4, shape=(128, 128), fmin=100, fmax=
     catalog : `~astropy.table.Table`
         Table with columns ``x``, ``y``, ``flux``.
     """
-    xs = np.linspace(0, shape[0], n_sources_side+2)[1:-1]
-    ys = np.linspace(0, shape[1], n_sources_side+2)[1:-1]
+    xs = np.linspace(0, shape[0], n_sources_side + 2)[1:-1]
+    ys = np.linspace(0, shape[1], n_sources_side + 2)[1:-1]
 
     xs, ys = np.meshgrid(xs, ys)
-    
+
     catalog = Table()
     catalog["x"] = xs.flatten()
     catalog["y"] = ys.flatten()
@@ -115,7 +118,9 @@ def simulate_image(
         Source catalog with injected truth values.
     """
     if catalog is None:
-        catalog = make_realistic_source_catalog(n_sources=n_sources, shape=shape, seed=seed)
+        catalog = make_realistic_source_catalog(
+            n_sources=n_sources, shape=shape, seed=seed
+        )
 
     psf = Moffat2D(amplitude=1, gamma=gamma, alpha=alpha, x_0=0, y_0=0)
 
