@@ -89,7 +89,9 @@ class TestExtractGrowthCurves:
         positions = np.column_stack([cat["x"], cat["y"]])
         radii = np.arange(1, 20, 0.5)
         bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
-        result = extract_growth_curves(img - 100, positions, radii, background_variance=bkg_var)
+        result = extract_growth_curves(
+            img - 100, positions, radii, background_variance=bkg_var
+        )
         assert np.all(result["background_var"] >= 0)
 
     def test_default_radii(self):
