@@ -124,6 +124,62 @@ class TestFitterInit:
         assert f.bkg_var.shape == f.fluxes.shape
         assert f.goods.shape == f.fluxes.shape
 
+    def test_initial_guess_empty_sources(self):
+        gc = {
+            "radius": np.array([1.0, 2.0, 4.0]),
+            "flux": np.empty((0, 3)),
+            "flux_clean": np.empty((0, 3)),
+            "background_var": np.empty((0, 3)),
+            "contamination": np.empty((0, 3)),
+        }
+        f = gcp.Fitter(gc)
+        ig = f.initial_guess()
+        assert ig["gamma"] == 3.0
+        assert ig["alpha"] == 3.0
+        assert len(ig["flux"]) == 0
+        assert len(ig["back"]) == 0
+
+    def test_results_all_dropped(self, small_sim):
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=500)
+        # Force all goods to False to simulate total rejection
+        f.goods = jnp.zeros_like(f.goods)
+        f._cut()
+        res = f.results(bf)
+        assert np.all(np.isnan(res["flux"]))
+        assert np.all(np.isnan(res["back"]))
+        assert res["gamma"] == float(bf["gamma"])
+
+    def test_results_length_mismatch(self, small_sim):
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=500)
+        # Pass bf with wrong-length arrays to trigger fallback
+        bf_bad = {
+            "gamma": bf["gamma"],
+            "alpha": bf["alpha"],
+            "flux": np.ones(len(positions) + 10),
+            "back": np.ones(len(positions) + 10),
+        }
+        res = f.results(bf_bad)
+        assert not np.all(np.isnan(res["flux"]))
+        assert len(res["flux"]) == len(positions)
+
+    def test_chi2_method(self, small_sim):
+        """Direct chi2 call covers the standalone chi2() method."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        ig = f.initial_guess()
+        val = float(f.chi2(ig))
+        assert np.isfinite(val)
+
 
 class TestFitterFit:
     @pytest.mark.skip(reason="convergence issue — needs tuning")
@@ -325,6 +381,17 @@ class TestRobustLoss:
         f.detect_contamination(bf)
         goods_after = int(f.goods.sum())
         assert goods_after <= goods_before
+
+    def test_fit_adam_tolerance_break(self):
+        from gcphotom.jaxfitter import fit_adam
+
+        def quadratic(x):
+            return (x["a"] - 5.0) ** 2
+
+        params = {"a": 0.0}
+        # Huge tolerance triggers early break
+        result, extra = fit_adam(quadratic, params, tol=1e30, niter=1000)
+        assert len(extra["loss"]) < 50  # broke early due to tol
 
     def test_tukey_gradient_bounded(self):
         """Tukey loss gradient goes to zero for large residuals (robustness property)."""

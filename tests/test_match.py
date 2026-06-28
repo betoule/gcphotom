@@ -173,3 +173,114 @@ class TestCrossMatchCatalogs:
         res = gcp.cross_match(det, sim, tolerance=1.0)
         assert len(res) == 1
         assert not np.isfinite(res["flux"][0])
+
+
+class TestNearestNeighAssoc:
+    def test_append_new_point(self):
+        ref = {"x": np.array([0.0]), "y": np.array([0.0])}
+        from gcphotom.match import NearestNeighAssoc, _euclidean
+
+        assoc = NearestNeighAssoc(first=[ref["x"], ref["y"]], radius=5.0)
+        idx = assoc.append(np.array([3.0]), np.array([4.0]), metric=_euclidean)
+        assert idx[0] == 1  # new cluster
+
+    def test_append_match_existing(self):
+        ref = {"x": np.array([0.0]), "y": np.array([0.0])}
+        from gcphotom.match import NearestNeighAssoc
+
+        assoc = NearestNeighAssoc(first=[ref["x"], ref["y"]], radius=5.0)
+        idx = assoc.append(np.array([1.0]), np.array([1.0]))
+        assert idx[0] == 0  # matched to existing
+
+    def test_get_cat_with_clusters(self):
+        from gcphotom.match import NearestNeighAssoc
+
+        assoc = NearestNeighAssoc()
+        assoc.clusters = [[10.0, 20.0, 3], [30.0, 40.0, 5]]
+        cat = assoc.get_cat()
+        assert len(cat) == 2
+
+    def test_get_cat_empty(self):
+        from gcphotom.match import NearestNeighAssoc
+
+        assoc = NearestNeighAssoc()
+        cat = assoc.get_cat()
+        assert len(cat) == 0
+
+    def test_match_exact_radius_zero(self):
+        ref = {"x": np.array([1.0, 2.0]), "y": np.array([3.0, 4.0])}
+        qry = {"x": np.array([1.0, 99.0]), "y": np.array([3.0, 99.0])}
+        from gcphotom.match import NearestNeighAssoc
+
+        assoc = NearestNeighAssoc(first=[ref["x"], ref["y"]], radius=0.0)
+        idx = assoc.match(np.array(qry["x"]), np.array(qry["y"]))
+        assert idx[0] == 0
+        assert idx[1] == -1
+
+    def test_match_empty_clusters(self):
+        from gcphotom.match import NearestNeighAssoc
+
+        assoc = NearestNeighAssoc(radius=5.0)
+        idx = assoc.match(np.array([0.0]), np.array([0.0]))
+        assert idx[0] == -1
+
+    def test_match_with_empty_bins(self):
+        from gcphotom.match import NearestNeighAssoc, _euclidean
+
+        assoc = NearestNeighAssoc(first=[[0.0], [0.0]], radius=5.0)
+        # Query a point far from any existing cluster
+        idx = assoc.match(np.array([100.0]), np.array([100.0]), metric=_euclidean)
+        assert idx[0] == -1
+
+    def test_append_multiple_and_recluster(self):
+        from gcphotom.match import NearestNeighAssoc, _euclidean
+
+        assoc = NearestNeighAssoc(radius=5.0)
+        # First append establishes bins
+        idx1 = assoc.append(
+            np.array([0.0, 10.0]), np.array([0.0, 10.0]), metric=_euclidean
+        )
+        assert idx1[0] == 0
+        assert idx1[1] == 1
+        # Second append: match to existing cluster 0
+        idx2 = assoc.append(np.array([1.0]), np.array([1.0]), metric=_euclidean)
+        assert idx2[0] == 0
+
+
+class TestMatchEdgeCases:
+    def test_match_sky_with_center(self):
+        """Explicit center in gnomonic projection."""
+        ref = {"ra": np.array([10.0, 10.1]), "dec": np.array([20.0, 20.0])}
+        qry = {"ra": np.array([10.05]), "dec": np.array([20.0])}
+        idx = gcp.match.match(ref, qry, project=True, xy=False, radius=0.1)
+        assert idx[0] >= 0
+
+    def test_match_sky_empty_ref(self):
+        ref = {"ra": np.array([], dtype=float), "dec": np.array([], dtype=float)}
+        qry = {"ra": np.array([10.0]), "dec": np.array([20.0])}
+        idx, dist = gcp.match.match(
+            ref, qry, project=True, xy=False, radius=1.0, compute_distances=True
+        )
+        assert idx[0] == -1
+        assert np.isinf(dist[0])
+
+    def test_cross_match_legacy_array(self):
+        a = np.array([[0.0, 0.0], [1.0, 1.0], [10.0, 10.0]])
+        b = np.array([[0.0, 0.0], [10.0, 10.0]])
+        res = gcp.cross_match(a, b, tolerance=1.0)
+        assert res["match_indices"][0] == 0
+        assert res["match_indices"][1] == -1
+        assert res["match_indices"][2] == 1
+
+    def test_cross_match_legacy_array_empty(self):
+        a = np.array([], dtype=float).reshape(0, 2)
+        b = np.array([[0.0, 0.0]])
+        res = gcp.cross_match(a, b, tolerance=1.0)
+        assert len(res["match_indices"]) == 0
+
+    def test_cross_match_legacy_empty_ref(self):
+        a = np.array([[0.0, 0.0]])
+        b = np.array([], dtype=float).reshape(0, 2)
+        res = gcp.cross_match(a, b, tolerance=1.0)
+        assert res["match_indices"][0] == -1
+        assert np.isinf(res["match_distances"][0])

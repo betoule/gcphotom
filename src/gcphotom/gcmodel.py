@@ -48,31 +48,6 @@ def annular_fluxes(x):
     return jnp.diff(x, prepend=0, axis=0)
 
 
-def moffat_model(params, radii):
-    """Growth curve model: Moffat profile + linear background.
-
-    Parameters
-    ----------
-    params : dict
-        Keys: ``flux``, ``gamma``, ``alpha``, ``back``.
-    radii : array_like
-        Aperture radii.
-
-    Returns
-    -------
-    model_flux : 2D array (n_radii, n_sources)
-        Cumulative model flux at each radius.
-    """
-    flux = params["flux"]
-    gamma = params["gamma"]
-    alpha = params["alpha"]
-    back = params["back"]
-    return (
-        flux[None, :] * moffat_flux(radii[:, None], gamma, alpha)
-        + back[None, :] * radii[:, None] ** 2 * jnp.pi
-    )
-
-
 def moffat_object_flux(params, radii):
     """Cumulative object flux (Moffat profile, no background).
 
@@ -290,7 +265,7 @@ class Fitter:
         self.background_estimate = self.fluxes[-1, :] / (
             jnp.pi * (self.radii[-1] ** 2 - self.radii[-2] ** 2)
         )
-        gamma_est = 3.0  # self._estimate_gamma(estimate * ac, alpha)
+        gamma_est = 3.0
 
         return {
             "gamma": gamma_est,
@@ -298,39 +273,6 @@ class Fitter:
             "flux": jnp.ones(nsrc),
             "back": self.background_estimate,
         }
-
-    def _estimate_gamma(self, total_flux, alpha):
-        """Estimate gamma from the 50%-flux radius of each source."""
-        cum_flux = self.fluxes.sum(axis=0)
-        half_flux = total_flux * 0.5
-        median_radii = []
-
-        for i in range(cum_flux.shape[0]):
-            target = half_flux[i]
-            above = cum_flux >= target
-            if jnp.any(above):
-                idx = int(jnp.argmax(above))
-                if idx > 0:
-                    r_lo = float(self.radii[idx - 1])
-                    r_hi = float(self.radii[idx])
-                    f_lo = float(cum_flux[idx - 1])
-                    f_hi = float(cum_flux[idx])
-                    if f_hi != f_lo:
-                        frac = (target - f_lo) / (f_hi - f_lo)
-                        median_radii.append(r_lo + frac * (r_hi - r_lo))
-                    else:
-                        median_radii.append(r_hi)
-                else:
-                    median_radii.append(float(self.radii[0]))
-            else:
-                median_radii.append(float(self.radii[-1]))
-
-        median_r = jnp.array(median_radii)
-        median_r = median_r[median_r > 0]
-        if len(median_r) == 0:
-            median_r = jnp.array([2.0])
-
-        return float(fwhm2gamma(sigma2fwhm(jnp.median(median_r)), alpha))
 
     def plot_PSF(self, bf, axes=None):
         """Plot the median PSF and residuals.

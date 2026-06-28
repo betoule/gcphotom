@@ -1,27 +1,9 @@
-"""The module provides two second order methods to solve non-linear
-problems
-"""
+"""Optimizers for growth-curve fitting."""
 
 import time
 
 import jax
 import jax.numpy as jnp
-
-
-def flatten_vector(v):
-    """Transforms a vector with a pytree structure into a standard array"""
-    return jnp.hstack([jnp.ravel(v[p]) for p in v])
-
-
-def unflatten_vector(p, v):
-    """Give a standard array v the exact same pytree structure as p"""
-    st = {}
-    i = 0
-    for k in p:
-        j = i + jnp.size(p[k])
-        st[k] = jnp.reshape(v[i:j], jnp.shape(p[k]))
-        i = j
-    return st
 
 
 def fit_adam(
