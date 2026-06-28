@@ -101,6 +101,7 @@ class Fitter:
         self.areas = annular_fluxes(self.radii**2 * jnp.pi)
         self.object_model = object_model
         self.estimate = None
+        self._loss_fn = None
         n = len(gc_result["flux"])
         self._orig_n = n
         self.kept = np.ones(n, dtype=bool)
@@ -229,9 +230,11 @@ class Fitter:
             initial_guess = self.initial_guess()
 
         if loss is None:
-            loss = jaxfitter.tukey(c=4.685)
+            self._loss_fn = jaxfitter.tukey(c=4.685)
+        else:
+            self._loss_fn = loss
 
-        loss_fn = jax.jit(lambda p: jnp.mean(loss(self.weighted_residuals(p))))
+        loss_fn = jax.jit(lambda p: jnp.mean(self._loss_fn(self.weighted_residuals(p))))
         bf, extra = jaxfitter.fit_adam(
             loss_fn, initial_guess, niter=niter, learning_rate=learning_rate, tol=None
         )
@@ -321,17 +324,117 @@ class Fitter:
         self.goods = self.goods & (jnp.abs(wr) < 5)
         self._cut()
 
-    def results(self, bf):
+    def _compute_uncertainty(self, bf, robust=False):
+        """Parameter covariance and standard errors at the best-fit point.
+
+        Uses the standard non-linear least-squares formula
+
+            Cov = (J^T W J)^{-1}
+
+        where J is the Jacobian of the *unweighted* annular model and
+        W = diag(1/σ²) are the inverse-variance weights from the noise model.
+        The covariance is optionally scaled by the reduced χ².
+
+        When ``robust=True`` and the loss function used during :meth:`fit`
+        is available, a sandwich estimator is used instead to account for
+        the robust loss:
+
+            Cov = B^{-1} · M · B^{-1}
+
+        where B = J^T diag(w · ψ′) J, M = J^T diag(w · ψ²) J, and ψ is the
+        influence function of the loss.
+
+        Parameters
+        ----------
+        bf : pytree
+            Best-fit parameters (same structure as returned by :meth:`fit`).
+        robust : bool, optional
+            If ``True``, apply the sandwich correction using the stored loss
+            function.  Default ``False``.
+
+        Returns
+        -------
+        cov : (n_params, n_params) ndarray
+            Covariance matrix in flattened-parameter space.
+        se : pytree
+            Standard errors in a pytree matching the structure of *bf*.
+        """
+        from jax.flatten_util import ravel_pytree
+
+        p0, unravel = ravel_pytree(bf)
+        n_params = p0.size
+        goods_mask = self.goods
+        n_good = int(goods_mask.sum())
+
+        if n_good <= n_params:
+            se = jax.tree_util.tree_map(lambda x: jnp.full_like(x, jnp.nan), bf)
+            return jnp.full((n_params, n_params), jnp.nan), se
+
+        def flat_model(pf):
+            p = unravel(pf)
+            m = annular_fluxes(self.model(p))
+            return m[goods_mask].ravel()
+
+        J = jax.jacfwd(flat_model)(p0)
+
+        scaled = self._flux(bf)
+        object_ann = annular_fluxes(self.object_model(scaled, self.radii))
+        noise = jnp.maximum(object_ann + self.bkg_var, 1e-30)
+        w = (1.0 / noise)[goods_mask].ravel()
+
+        JTWJ = (J * w[:, None]).T @ J
+        cov = jnp.linalg.inv(JTWJ)
+
+        wr = self.weighted_residuals(bf)[goods_mask].ravel()
+        chi2 = jnp.sum(wr**2)
+        dof = n_good - n_params
+        cov = jnp.where(dof > 0, cov * (chi2 / dof), cov)
+
+        if robust and self._loss_fn is not None:
+            from .jaxfitter import loss_derivatives
+
+            psi, psi_deriv = loss_derivatives(self._loss_fn)
+            r = self.weighted_residuals(bf)[goods_mask].ravel()
+            Jw = J * w[:, None]
+            bread = Jw.T @ (psi_deriv(r)[:, None] * Jw)
+            meat = Jw.T @ ((psi(r) ** 2)[:, None] * Jw)
+            cov = jnp.linalg.inv(bread) @ meat @ jnp.linalg.inv(bread)
+
+        se_flat = jnp.sqrt(jnp.diag(cov))
+        leaves, treedef = jax.tree_util.tree_flatten(bf)
+        se_leaves = []
+        start = 0
+        for leaf in leaves:
+            size = leaf.size
+            se_leaves.append(se_flat[start : start + size].reshape(leaf.shape))
+            start += size
+        se = jax.tree_util.tree_unflatten(treedef, se_leaves)
+
+        return cov, se
+
+    def results(self, bf, compute_errors="diag", robust=False):
         """Extract fitted results as a dictionary.
 
         Parameters
         ----------
         bf : dict
             Best-fit parameters.
+        compute_errors : bool or str, optional
+            Controls uncertainty output:
+
+            - ``False`` or ``"none"`` — no uncertainty.
+            - ``"diag"`` (default) — include ``std_errors`` pytree.
+            - ``"full"`` — include ``std_errors``, ``covariance``, and
+              ``correlation``.
+        robust : bool, optional
+            If ``True``, use the sandwich estimator (requires the loss
+            function stored by :meth:`fit`).  Default ``False``.
 
         Returns
         -------
-        dict with keys ``flux``, ``back``, ``gamma``, ``alpha``, ``ngoods``, ``chi2``.
+        dict with keys ``flux``, ``back``, ``gamma``, ``alpha``, ``ngoods``,
+        ``chi2`` and, if *compute_errors* is set, ``std_errors``
+        (and optionally ``covariance``, ``correlation``).
         Per-source arrays (flux, back, ngoods, chi2) have length equal to the
         original number of sources passed to extract_growth_curves. Dropped
         sources (via internal cuts or detect_contamination) are represented
@@ -430,7 +533,7 @@ class Fitter:
             if isinstance(bf, dict)
             else float(getattr(bf, "alpha", np.nan))
         )
-        return {
+        result = {
             "flux": full_flux,
             "back": full_back,
             "gamma": g,
@@ -438,3 +541,14 @@ class Fitter:
             "ngoods": full_ng,
             "chi2": full_chi,
         }
+
+        if compute_errors and compute_errors != "none":
+            cov, se_pytree = self._compute_uncertainty(tmp_bf, robust=robust)
+            result["std_errors"] = se_pytree
+            if compute_errors == "full":
+                se_flat = np.sqrt(np.diag(np.asarray(cov)))
+                corr = np.asarray(cov) / np.outer(se_flat, se_flat)
+                result["covariance"] = np.asarray(cov)
+                result["correlation"] = corr
+
+        return result

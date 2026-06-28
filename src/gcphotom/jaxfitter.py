@@ -130,3 +130,42 @@ def cauchy(c=1.0):
         return c**2 * jnp.log(1 + (x / c) ** 2)
 
     return loss
+
+
+def loss_derivatives(loss_fn):
+    """Return (psi, psi_deriv) for any differentiable element-wise loss.
+
+    ``psi(x) = d(loss)/dx`` is the influence function.
+    ``psi_deriv(x) = d^2(loss)/dx^2`` is its derivative.
+
+    Both functions are vectorized over the input array.
+
+    Parameters
+    ----------
+    loss_fn : callable
+        Loss function ``loss_fn(x) -> per-element loss`` where *x* is a 1-D
+        array of residuals and the output has the same shape.  Typical values
+        are the return values of :func:`tukey`, :func:`pseudo_huber`, or
+        :func:`cauchy`.
+
+    Returns
+    -------
+    psi : callable
+        ``psi(x) -> per-element psi(x)``.
+    psi_deriv : callable
+        ``psi_deriv(x) -> per-element psi'(x)``.
+    """
+
+    def _element_loss(x_scalar):
+        return loss_fn(jnp.array([x_scalar]))[0]
+
+    psi_element = jax.grad(_element_loss)
+    psi_deriv_element = jax.grad(psi_element)
+
+    def psi(x):
+        return jax.vmap(psi_element)(x)
+
+    def psi_deriv(x):
+        return jax.vmap(psi_deriv_element)(x)
+
+    return psi, psi_deriv
