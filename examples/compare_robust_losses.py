@@ -6,7 +6,6 @@ aperture contamination from undetected sources and PSF tails.
 """
 
 import time
-from collections import OrderedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -45,12 +44,12 @@ fitter = gcp.Fitter(cog)
 initial_guess = fitter.initial_guess()
 
 # Using OrderedDict to preserve iteration order across Python versions
-losses = OrderedDict()
-losses["chi2"] = lambda x: x**2
-losses["Tukey c=4.685"] = gcp.tukey()
-losses["Tukey c=3"] = gcp.tukey(c=3.0)
-losses["Pseudo-Huber c=2"] = gcp.pseudo_huber(c=2.0)
-losses["Cauchy c=2"] = gcp.cauchy(c=2.0)
+losses = {
+    "chi2": lambda x: x**2,
+    "Tukey c=4.685": gcp.tukey(),
+    "Pseudo-Huber c=2": gcp.pseudo_huber(c=2.0),
+    "Cauchy c=2": gcp.cauchy(c=2.0),
+}
 
 results = {}
 for i, (name, loss_fn) in enumerate(losses.items()):
@@ -87,13 +86,12 @@ print("6. Plotting...", end=" ", flush=True)
 colors = {
     "chi2": "#555555",
     "Tukey c=4.685": "#2166ac",
-    "Tukey c=3": "#4393c3",
     "Pseudo-Huber c=2": "#d6604d",
     "Cauchy c=2": "#b2182b",
 }
 
 fig, (ax1, ax2) = plt.subplots(
-    2, 1, figsize=(10, 8), gridspec_kw={"height_ratios": [2, 1]}
+    2, 1, figsize=(10, 8), gridspec_kw={"height_ratios": [2, 1.2]}
 )
 
 # -- Panel 1: Binned flux ratio vs true flux --
@@ -142,41 +140,44 @@ ax1.set_title(
 )
 ax1.legend(fontsize=9, loc="upper left", ncol=2)
 
-# -- Panel 2: Gamma estimates --
-gamma_true = 3.0
+# -- Panel 2: PSF parameter biases (gamma and alpha) --
+true_val = {"gamma": 3.0, "alpha": 3.0}
 x_pos = np.arange(len(losses))
-bar_colors = [colors[n] for n in losses]
+width = 0.30
+
+for j, par in enumerate(["gamma", "alpha"]):
+    offset = (j - 0.5) * width
+    vals = [results[n]["bf"][par] - true_val[par] for n in losses]
+    bars = ax2.bar(
+        x_pos + offset,
+        vals,
+        width,
+        color=[colors[n] for n in losses],
+        edgecolor="white",
+        alpha=0.6 + 0.4 * (1 - j),
+        label=f"${par}$" if j == 0 else None,
+    )
+    for i, (name, v) in enumerate(zip(losses, vals)):
+        y_pos = v + 0.005 * (1 if v >= 0 else -1)
+        ax2.text(
+            i + offset,
+            y_pos,
+            f"{v:+.3f}",
+            fontsize=6,
+            ha="center",
+            va="bottom" if v >= 0 else "top",
+        )
 
 ax2.axhline(0.0, color="gray", linestyle="--", linewidth=0.8)
-ax2.bar(
-    x_pos,
-    [results[n]["bf"]["gamma"] - gamma_true for n in losses],
-    color=bar_colors,
-    width=0.6,
-    edgecolor="white",
-)
 ax2.set_xticks(x_pos)
 ax2.set_xticklabels(list(losses.keys()), fontsize=8, rotation=20, ha="right")
-ax2.set_ylabel("$\\gamma - \\gamma_{\\rm true}$")
-ax2.set_title("PSF scale parameter bias")
-
-# Add value annotations on bars
-for i, name in enumerate(losses):
-    delta = results[name]["bf"]["gamma"] - gamma_true
-    y_pos = delta + 0.01 * (1 if delta >= 0 else -1)
-    ax2.text(
-        i,
-        y_pos,
-        f"{delta:+.3f}",
-        fontsize=7,
-        ha="center",
-        va="bottom" if delta >= 0 else "top",
-    )
+ax2.set_ylabel("Estimated $-$ True")
+ax2.set_title("PSF parameter bias")
 
 plt.tight_layout()
 plt.savefig("robust_loss_comparison.png", dpi=150)
 print("saved robust_loss_comparison.png")
-plt.close()
+# plt.close()
 
 # 7. Print summary table
 print("\n--- Summary ---")
