@@ -60,21 +60,22 @@ Assemble the final image:
 
 ## Module 2: `aperture.py`
 
-### `extract_growth_curves(image, positions, radii, error=None)`
+### `extract_growth_curves(image, positions, radii, background_variance=None)`
 
 Extract circular growth curves for each source position:
 
 1. For each `(x, y)` in `positions`:
-   - `photutils.profiles.CurveOfGrowth(image, (x, y), radii, error=error)`
+   - `photutils.profiles.CurveOfGrowth(image, (x, y), radii, error=sqrt(background_variance))`
    - Collect `profile` (cumulative flux), `profile_error`, `radius`
-  2. **Return**: A dict with:
+   - `background_var[i] = profile_error**2` (cumulative background variance)
+   2. **Return**: A dict with:
     ```python
     {
-        "radius": ndarray,           # shape (n_radii,)
-        "flux": ndarray,             # shape (n_sources, n_radii)
-        "flux_err": ndarray,         # shape (n_sources, n_radii)
-        "flux_clean": ndarray,       # shape (n_sources, n_radii)
-        "contamination": ndarray,    # shape (n_sources, n_radii)
+        "radius": ndarray,             # shape (n_radii,)
+        "flux": ndarray,               # shape (n_sources, n_radii)
+        "background_var": ndarray,     # shape (n_sources, n_radii)
+        "flux_clean": ndarray,         # shape (n_sources, n_radii)
+        "contamination": ndarray,      # shape (n_sources, n_radii)
     }
     ```
     When no segmentation image is provided, `flux_clean` is identical to
@@ -82,15 +83,7 @@ Extract circular growth curves for each source position:
 
 ### `extract_single_growth_curve(image, position, radii, error=None)`
 
-Convenience wrapper for single-source extraction. Returns `(radius, profile, profile_error)`.
-
-### `estimate_error(image, background, read_noise)`
-
-Compute per-pixel error estimate:
-```
-error = sqrt(max(image - background, 0) + read_noise**2)
-```
-The `max(..., 0)` avoids negative values under the background.
+Convenience wrapper for single-source extraction. Returns `(radius, profile, profile_error)`. The `error` parameter expects a per-pixel 1-sigma map (for compatibility with `photutils.CurveOfGrowth`).
 
 ---
 
@@ -118,16 +111,12 @@ The `max(..., 0)` avoids negative values under the background.
 
 | Test | What it checks |
 |------|----------------|
-| `test_shape` | `estimate_error` returns correct shape |
-| `test_known_values` | `estimate_error` gives expected value for known inputs |
-| `test_read_noise_dominant` | Read noise dominates when signal is zero |
-| `test_no_negative_signal` | Negative signal clamped to zero |
 | `test_output_shapes` | Growth curve output arrays have correct shapes |
 | `test_monotonic_increase` | Profile is mostly monotonically increasing (isolated source) |
 | `test_flux_recovery` | Recovered flux at large radius matches injected flux (within tolerance) |
 | `test_with_error` | Error map propagates to profile error |
 | `test_multi_source` | All sources get growth curves extracted with correct shapes |
-| `test_with_error_map` | Error estimates work with background-subtracted images |
+| `test_with_background_variance` | Background variance map produces valid cumulative variance |
 
 ---
 

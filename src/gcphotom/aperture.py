@@ -11,27 +11,6 @@ from photutils.segmentation import (
 from .match import cross_match as _cross_match  # re-export for backward compat
 
 
-def estimate_error(image, background, read_noise):
-    """Compute per-pixel error estimate.
-
-    Parameters
-    ----------
-    image : 2D `~numpy.ndarray`
-        Image data.
-    background : float
-        Estimated background level.
-    read_noise : float
-        Read noise standard deviation.
-
-    Returns
-    -------
-    error : 2D `~numpy.ndarray`
-        Per-pixel 1-sigma error.
-    """
-    signal = np.maximum(image - background, 0)
-    return np.sqrt(signal + read_noise**2)
-
-
 def _extract_single_growth_curve(image, position, radii, error=None, mask=None):
     """Extract a circular growth curve for a single source.
 
@@ -100,7 +79,7 @@ def _as_positions(sources):
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 def extract_growth_curves(
-    image, sources, radii=None, error=None, segmentation_image=None
+    image, sources, radii=None, background_variance=None, segmentation_image=None
 ):
     """Extract circular growth curves for multiple sources.
 
@@ -114,10 +93,13 @@ def extract_growth_curves(
         providing ``x``/``y`` columns or ``x_centroid``/``y_centroid``.
     radii : 1D `~numpy.ndarray` or None
         Aperture radii in pixels. Defaults to 10 logarithmically spaced
-        values between 0.5 and 30 pixels.
-    error : 2D `~numpy.ndarray` or None
-        Per-pixel 1-sigma error. If ``None`` (default), an error map is
-        estimated automatically via sigma-clipped statistics on the image.
+        values between 3 and 30 pixels.
+    background_variance : 2D `~numpy.ndarray` or None
+        Per-pixel background variance map. If ``None`` (default), the
+        variance is estimated as ``std**2`` via sigma-clipped statistics
+        on the image. This variance captures background photon noise,
+        read-out noise, and any other spatially stationary noise source.
+        Object photon noise is handled separately during fitting.
     segmentation_image : `~photutils.segmentation.SegmentationImage` or None
         Segmentation map from :func:`detect_and_segment`. If provided,
         contamination from neighboring sources is estimated.
@@ -129,8 +111,9 @@ def extract_growth_curves(
 
         * ``radius``: 1D array of aperture radii.
         * ``flux``: 2D array ``(n_sources, n_radii)`` of cumulative flux.
-        * ``flux_err``: 2D array ``(n_sources, n_radii)`` of flux
-          uncertainties.
+        * ``background_var``: 2D array ``(n_sources, n_radii)`` of
+          cumulative background variance (background pixel variance
+          multiplied by the effective aperture area at each radius).
         * ``flux_clean``: 2D array ``(n_sources, n_radii)`` of flux with
           neighboring sources masked. When ``segmentation_image`` is not
           provided, ``flux_clean`` is identical to ``flux``.
@@ -145,13 +128,16 @@ def extract_growth_curves(
     n_sources = len(positions)
     n_radii = len(radii)
     flux = np.zeros((n_sources, n_radii))
-    flux_err = np.zeros((n_sources, n_radii))
+    background_var = np.zeros((n_sources, n_radii))
     flux_clean = np.zeros((n_sources, n_radii))
     contamination = np.zeros((n_sources, n_radii))
 
-    if error is None:
-        _, bg, std = sigma_clipped_stats(image)
-        error = np.sqrt(np.maximum(image - bg, 0.0) + std**2)
+    if background_variance is None:
+        _, _, std = sigma_clipped_stats(image)
+        background_variance = np.full_like(image, std**2)
+
+    # Convert variance to 1-sigma for photutils CurveOfGrowth
+    error = np.sqrt(background_variance)
 
     if segmentation_image is not None:
         seg_data = segmentation_image.data
@@ -161,7 +147,7 @@ def extract_growth_curves(
             image, pos, radii, error=error
         )
         flux[i] = profile
-        flux_err[i] = profile_err
+        background_var[i] = profile_err**2
 
         if segmentation_image is not None:
             mask = (seg_data != segmentation_image.labels[i]) & (seg_data > 0)
@@ -176,7 +162,7 @@ def extract_growth_curves(
     return {
         "radius": radii,
         "flux": flux,
-        "flux_err": flux_err,
+        "background_var": background_var,
         "flux_clean": flux_clean,
         "contamination": contamination,
     }

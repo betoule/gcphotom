@@ -94,7 +94,7 @@ class TestMoffatFunctions:
         gc0 = {
             "radius": np.array([1.0, 2.0]),
             "flux": np.zeros((0, 2)),
-            "flux_err": np.zeros((0, 2)),
+            "background_var": np.zeros((0, 2)),
             "flux_clean": np.zeros((0, 2)),
             "contamination": np.zeros((0, 2)),
         }
@@ -120,7 +120,7 @@ class TestFitterInit:
         f = gcp.Fitter(gc)
         assert f.fluxes.shape[1] <= len(cat)
         assert f.fluxes.shape[0] == len(gc["radius"])
-        assert f.var.shape == f.fluxes.shape
+        assert f.bkg_var.shape == f.fluxes.shape
         assert f.goods.shape == f.fluxes.shape
 
 
@@ -169,8 +169,8 @@ class TestFitterBackground:
     def test_background_recovery(self, small_sim_with_bg):
         img, cat = small_sim_with_bg
         positions = np.column_stack([cat["x"], cat["y"]])
-        error = gcp.estimate_error(img, background=100, read_noise=3)
-        gc = gcp.extract_growth_curves(img - 100, positions, error=error)
+        bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
+        gc = gcp.extract_growth_curves(img - 100, positions, background_variance=bkg_var)
         f = gcp.Fitter(gc)
         bf, _ = f.fit(niter=5000, learning_rate=1e-2)
         res = f.results(bf)
@@ -181,8 +181,8 @@ class TestFitterBackground:
     def test_flux_recovery_with_bg(self, small_sim_with_bg):
         img, cat = small_sim_with_bg
         positions = np.column_stack([cat["x"], cat["y"]])
-        error = gcp.estimate_error(img, background=100, read_noise=3)
-        gc = gcp.extract_growth_curves(img - 100, positions, error=error)
+        bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
+        gc = gcp.extract_growth_curves(img - 100, positions, background_variance=bkg_var)
         f = gcp.Fitter(gc)
         bf, _ = f.fit(niter=5000, learning_rate=1e-2)
         res = f.results(bf)
@@ -261,8 +261,8 @@ class TestFullPipeline:
             shape=(1024, 1024), gamma=2.5, alpha=3.0, background=50, seed=42
         )
         positions = np.column_stack([cat["x"], cat["y"]])
-        error = gcp.estimate_error(img, background=50, read_noise=0)
-        gc = gcp.extract_growth_curves(img - 50, positions, error=error)
+        # Use auto background variance estimate (background=50, read_noise=0 in simulation)
+        gc = gcp.extract_growth_curves(img - 50, positions)
         f = gcp.Fitter(gc)
         bf, _ = f.fit(niter=5000, learning_rate=1e-2)
         res = f.results(bf)

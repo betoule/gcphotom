@@ -4,7 +4,6 @@ from astropy.table import Table
 from gcphotom.aperture import (
     cross_match,
     detect_and_segment,
-    estimate_error,
     extract_growth_curves,
     _extract_single_growth_curve,
 )
@@ -21,31 +20,6 @@ def simple_image():
         shape, cat, gamma=2.5, alpha=3.0, background=0, seed=42
     )
     return img, returned_cat
-
-
-class TestEstimateError:
-    def test_shape(self):
-        img = np.ones((64, 64)) * 100
-        err = estimate_error(img, background=50, read_noise=3)
-        assert err.shape == (64, 64)
-
-    def test_known_values(self):
-        img = np.ones((10, 10)) * 100
-        err = estimate_error(img, background=50, read_noise=0)
-        expected = np.sqrt(50)
-        assert np.allclose(err, expected)
-
-    def test_read_noise_dominant(self):
-        img = np.ones((10, 10)) * 10
-        err = estimate_error(img, background=10, read_noise=5)
-        expected = np.sqrt(0 + 5**2)
-        assert np.allclose(err, expected)
-
-    def test_no_negative_signal(self):
-        img = np.ones((10, 10)) * 10
-        err = estimate_error(img, background=50, read_noise=3)
-        expected = np.sqrt(0 + 3**2)
-        assert np.allclose(err, expected)
 
 
 class TestExtractSingleGrowthCurve:
@@ -101,9 +75,9 @@ class TestExtractGrowthCurves:
 
         assert len(result["radius"]) == len(radii)
         assert result["flux"].shape == (5, len(radii))
-        assert result["flux_err"].shape == (5, len(radii))
+        assert result["background_var"].shape == (5, len(radii))
 
-    def test_with_error_map(self):
+    def test_with_background_variance(self):
         shape = (256, 256)
         cat = make_realistic_source_catalog(3, shape=shape, seed=42)
         for i in range(len(cat)):
@@ -114,9 +88,9 @@ class TestExtractGrowthCurves:
         )
         positions = np.column_stack([cat["x"], cat["y"]])
         radii = np.arange(1, 20, 0.5)
-        error = estimate_error(img, 100, 3)
-        result = extract_growth_curves(img - 100, positions, radii, error=error)
-        assert np.all(result["flux_err"] > 0)
+        bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
+        result = extract_growth_curves(img - 100, positions, radii, background_variance=bkg_var)
+        assert np.all(result["background_var"] >= 0)
 
     def test_default_radii(self):
         shape = (128, 128)
@@ -275,12 +249,12 @@ class TestExtractGrowthCurvesCatalogInput:
         result = extract_growth_curves(img, cat, segmentation_image=seg)
         assert result["flux"].shape[0] == 1
 
-    def test_auto_error_path(self, controlled_catalog):
+    def test_auto_background_variance(self, controlled_catalog):
         img = controlled_catalog([(80, 80)])
         seg, cat = detect_and_segment(img, background=100)
-        # do not pass error -> auto inside
+        # do not pass background_variance -> auto inside
         result = extract_growth_curves(img, cat, segmentation_image=seg)
-        assert np.all(result["flux_err"] >= 0)
+        assert np.all(result["background_var"] >= 0)
 
     def test_extract_accepts_positions_list(self, controlled_catalog):
         img = controlled_catalog([(55, 55)])

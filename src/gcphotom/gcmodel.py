@@ -80,7 +80,7 @@ class Fitter:
     ----------
     gc_result : dict
         Output of :func:`gcphotom.aperture.extract_growth_curves`, which always
-        contains ``radius``, ``flux``, ``flux_err``, ``flux_clean``, and
+        contains ``radius``, ``flux``, ``background_var``, ``flux_clean``, and
         ``contamination``. The fitter uses ``flux_clean`` for the data to fit.
     model : callable, optional
         Model function ``f(params, radii) -> cumulative_flux``.
@@ -111,17 +111,17 @@ class Fitter:
         self._cut()
 
     def _set_data(self, gc_result):
-        """Extract annular fluxes and variances from cumulative growth curves.
+        """Extract annular fluxes and background variances from cumulative growth curves.
 
         gc_result["flux_clean"] has shape (n_sources, n_radii); we transpose to
         (n_radii, n_sources) to match the model convention.
         """
         cum_flux = jnp.array(gc_result["flux_clean"]).T
         self.fluxes = annular_fluxes(cum_flux)
-        var_cum = jnp.array(gc_result["flux_err"]).T ** 2
-        self.var = annular_fluxes(var_cum)
-        self.var = jnp.clip(self.var, 1e-30, None)
-        self.goods = jnp.isfinite(self.fluxes) & jnp.isfinite(self.var)
+        var_cum = jnp.array(gc_result["background_var"]).T
+        self.bkg_var = annular_fluxes(var_cum)
+        self.bkg_var = jnp.clip(self.bkg_var, 1e-30, None)
+        self.goods = jnp.isfinite(self.fluxes) & jnp.isfinite(self.bkg_var)
 
     def _cut(self):
         """Remove sources with fewer than 2 good data points."""
@@ -131,7 +131,7 @@ class Fitter:
         if getattr(self, "estimate", None) is not None:
             self.estimate = np.asarray(self.estimate)[valid]
         self.fluxes = self.fluxes[:, valid]
-        self.var = self.var[:, valid]
+        self.bkg_var = self.bkg_var[:, valid]
         self.goods = self.goods[:, valid]
 
     def _flux(self, params):
@@ -147,10 +147,15 @@ class Fitter:
         return r
 
     def weighted_residuals(self, params, mask=False):
-        """Weighted annular residuals."""
+        """Weighted annular residuals.
+
+        The noise estimate combines object photon noise (Poisson variance
+        approximated by the model annular flux) with the a priori background
+        variance from the growth curve extraction.
+        """
         m = annular_fluxes(self.model(self._flux(params), self.radii))
         residuals = self.fluxes - m
-        noise = jnp.maximum(m, 1e-30)
+        noise = jnp.maximum(m + self.bkg_var, 1e-30)
         r = residuals / jnp.sqrt(noise) * self.goods
         if mask:
             return r.at[~self.goods].set(jnp.nan)
