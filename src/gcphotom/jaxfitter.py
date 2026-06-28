@@ -84,3 +84,67 @@ def fit_adam(
             break
     timings = jnp.array(timings)
     return params, {"loss": jnp.array(losses), "timings": timings}
+
+
+def tukey(c=4.685):
+    """Tukey's bisquare (biweight) loss function.
+
+    Parameters
+    ----------
+    c : float
+        Scale parameter. Points with ``|x| > c`` contribute zero gradient.
+        Default ``4.685`` provides 95% efficiency for Gaussian noise.
+
+    Returns
+    -------
+    callable
+        Loss function ``loss(x) -> per-element loss`` suitable for use as
+        the ``loss`` argument of :meth:`gcphotom.Fitter.fit`.
+    """
+
+    def loss(x):
+        mask = jnp.abs(x) <= c
+        return jnp.where(mask, c**2 / 6 * (1 - (1 - (x / c) ** 2) ** 3), c**2 / 6)
+
+    return loss
+
+
+def pseudo_huber(c=1.0):
+    """Pseudo-Huber loss function (smooth, C^\\infty robust loss).
+
+    Parameters
+    ----------
+    c : float
+        Scale parameter controlling the transition from quadratic to linear
+        behaviour. Default ``1.0``.
+
+    Returns
+    -------
+    callable
+        Loss function ``loss(x) -> per-element loss``.
+    """
+
+    def loss(x):
+        return c**2 * (jnp.sqrt(1 + (x / c) ** 2) - 1)
+
+    return loss
+
+
+def cauchy(c=1.0):
+    """Cauchy (Lorentzian) loss function.
+
+    Parameters
+    ----------
+    c : float
+        Scale parameter. Default ``1.0``.
+
+    Returns
+    -------
+    callable
+        Loss function ``loss(x) -> per-element loss``.
+    """
+
+    def loss(x):
+        return c**2 * jnp.log(1 + (x / c) ** 2)
+
+    return loss

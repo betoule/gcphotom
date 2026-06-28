@@ -213,8 +213,10 @@ class Fitter:
         """Mean squared weighted residual."""
         return jnp.mean(self.weighted_residuals(params) ** 2)
 
-    def fit(self, initial_guess=None, niter=10000, learning_rate=5e-3, show=False):
-        """Fit using Adam optimizer.
+    def fit(
+        self, initial_guess=None, niter=10000, learning_rate=5e-3, show=False, loss=None
+    ):
+        """Fit using Adam optimizer with a robust M-estimator loss.
 
         Parameters
         ----------
@@ -226,6 +228,18 @@ class Fitter:
             Adam learning rate.
         show : bool
             If ``True``, plot the loss curve.
+        loss : callable or None
+            Loss function ``f(weighted_residual) -> per-element loss``.
+            Defaults to Tukey's bisquare with ``c=4.685``
+            (``gcphotom.tukey()``).
+
+            Common choices::
+
+                fit(loss=gcp.tukey(c=4.685))        — Tukey bisquare (default)
+                fit(loss=gcp.pseudo_huber(c=2.0))    — pseudo-Huber
+                fit(loss=gcp.cauchy(c=2.0))          — Cauchy
+                fit(loss=lambda x: x**2)             — standard chi2
+                fit(loss=lambda x: jnp.abs(x))       — L1 loss
 
         Returns
         -------
@@ -239,9 +253,12 @@ class Fitter:
         if initial_guess is None:
             initial_guess = self.initial_guess()
 
-        chi2_fn = jax.jit(self.chi2)
+        if loss is None:
+            loss = jaxfitter.tukey(c=4.685)
+
+        loss_fn = jax.jit(lambda p: jnp.mean(loss(self.weighted_residuals(p))))
         bf, extra = jaxfitter.fit_adam(
-            chi2_fn, initial_guess, niter=niter, learning_rate=learning_rate, tol=None
+            loss_fn, initial_guess, niter=niter, learning_rate=learning_rate, tol=None
         )
         if show:
             plt.plot(extra["loss"])

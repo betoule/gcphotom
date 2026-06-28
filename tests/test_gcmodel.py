@@ -1,5 +1,6 @@
 """Tests for gcmodel.Fitter."""
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -170,7 +171,9 @@ class TestFitterBackground:
         img, cat = small_sim_with_bg
         positions = np.column_stack([cat["x"], cat["y"]])
         bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
-        gc = gcp.extract_growth_curves(img - 100, positions, background_variance=bkg_var)
+        gc = gcp.extract_growth_curves(
+            img - 100, positions, background_variance=bkg_var
+        )
         f = gcp.Fitter(gc)
         bf, _ = f.fit(niter=5000, learning_rate=1e-2)
         res = f.results(bf)
@@ -182,7 +185,9 @@ class TestFitterBackground:
         img, cat = small_sim_with_bg
         positions = np.column_stack([cat["x"], cat["y"]])
         bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
-        gc = gcp.extract_growth_curves(img - 100, positions, background_variance=bkg_var)
+        gc = gcp.extract_growth_curves(
+            img - 100, positions, background_variance=bkg_var
+        )
         f = gcp.Fitter(gc)
         bf, _ = f.fit(niter=5000, learning_rate=1e-2)
         res = f.results(bf)
@@ -271,3 +276,76 @@ class TestFullPipeline:
         assert np.median(ratios) > 0.5
         assert np.median(ratios) < 1.5
         assert np.std(np.log10(ratios)) < 0.2
+
+
+class TestRobustLoss:
+    def test_loss_functions(self):
+        """All loss factory functions return callables that work with JAX arrays."""
+        x = jnp.array([0.0, 1.0, 2.0, 10.0])
+        for factory in [gcp.tukey(), gcp.pseudo_huber(), gcp.cauchy()]:
+            result = factory(x)
+            assert result.shape == x.shape
+            assert jnp.all(result >= 0)
+            assert float(result[0]) == 0.0
+
+    def test_tukey_saturation(self):
+        """Tukey loss saturates at c^2/6 beyond |x| > c."""
+        t = gcp.tukey(c=3.0)
+        result = t(jnp.array([0.0, 10.0]))
+        assert float(result[1]) == pytest.approx(3.0**2 / 6)
+
+    def test_fit_default_loss(self, small_sim):
+        """Default fit uses Tukey bisquare and converges."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, extra = f.fit(niter=500)
+        assert bf is not None
+        assert float(extra["loss"][-1]) < float(extra["loss"][0]) * 0.99
+
+    def test_fit_chi2_loss(self, small_sim):
+        """User-provided lambda equivalent to chi2 works."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, extra = f.fit(niter=500, loss=lambda x: x**2)
+        assert bf is not None
+        assert float(extra["loss"][-1]) < float(extra["loss"][0]) * 0.99
+
+    def test_detect_contamination_after_robust_fit(self, small_sim):
+        """detect_contamination still works after a robust fit."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=500)
+        goods_before = int(f.goods.sum())
+        f.detect_contamination(bf)
+        goods_after = int(f.goods.sum())
+        assert goods_after <= goods_before
+
+    def test_tukey_gradient_bounded(self):
+        """Tukey loss gradient goes to zero for large residuals (robustness property)."""
+        import jax
+
+        x_large = jnp.array(100.0)
+        x_small = jnp.array(0.1)
+
+        t = gcp.tukey(c=4.685)
+        chi2 = lambda x: x**2
+
+        grad_t = jax.grad(lambda x: jnp.mean(t(x)))
+        grad_c = jax.grad(lambda x: jnp.mean(chi2(x)))
+
+        gtl = float(grad_t(x_large))
+        gcl = float(grad_c(x_large))
+        # For large residual: chi2 gradient >> Tukey gradient
+        assert gtl < gcl * 0.01
+
+        gts = float(grad_t(x_small))
+        gcs = float(grad_c(x_small))
+        # For small residual: both gradients are similar
+        ratio = gts / gcs
+        assert 0.4 < ratio < 2.0
