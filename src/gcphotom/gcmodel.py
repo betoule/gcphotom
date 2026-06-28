@@ -155,7 +155,7 @@ class Fitter:
         """
         m = annular_fluxes(self.model(self._flux(params), self.radii))
         residuals = self.fluxes - m
-        noise = jnp.maximum(m + self.bkg_var, 1e-30)
+        noise = jnp.maximum(self.bkg_var + m, 1e-30)
         r = residuals / jnp.sqrt(noise) * self.goods
         if mask:
             return r.at[~self.goods].set(jnp.nan)
@@ -202,7 +202,7 @@ class Fitter:
     def initial_guess(self, alpha=3.0):
         """Heuristic initial parameter guess.
 
-                Estimates total flux from inner aperture scaling, and gamma from
+        Estimates total flux from inner aperture scaling, and gamma from
         the 50%-flux radius of each growth curve.
         """
         nsrc = self.fluxes.shape[1]
@@ -222,7 +222,7 @@ class Fitter:
         ac = float(jnp.nanmedian(f_outer / f_inner))
         estimate = f_inner * ac
         self.estimate = estimate
-        self.background_estimate = (self.fluxes[-1, :] - self.fluxes[-2, :]) / (
+        self.background_estimate = self.fluxes[-1, :] / (
             jnp.pi * (self.radii[-1] ** 2 - self.radii[-2] ** 2)
         )
         gamma_est = 3.0  # self._estimate_gamma(estimate * ac, alpha)

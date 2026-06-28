@@ -31,7 +31,7 @@ import gcphotom as gcp
 import matplotlib.pyplot as plt
 
 # 1. Simulate a realistic astronomical image
-image, sim_cat = gcp.simulate_image(background=100, read_noise=5)
+image, sim_cat = gcp.simulate_image(n_sources=100, background=100, read_noise=5)
 
 # 2. Detect sources and build segmentation image (now takes care of background estimation)
 seg, det_cat = gcp.detect_and_segment(image)
