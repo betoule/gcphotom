@@ -73,6 +73,27 @@ def moffat_model(params, radii):
     )
 
 
+def moffat_object_flux(params, radii):
+    """Cumulative object flux (Moffat profile, no background).
+
+    Parameters
+    ----------
+    params : dict
+        Keys: ``flux``, ``gamma``, ``alpha``.
+    radii : array_like
+        Aperture radii.
+
+    Returns
+    -------
+    cum_flux : 2D array (n_radii, n_sources)
+        Cumulative object flux at each radius.
+    """
+    flux = params["flux"]
+    gamma = params["gamma"]
+    alpha = params["alpha"]
+    return flux[None, :] * moffat_flux(radii[:, None], gamma, alpha)
+
+
 class Fitter:
     """Fit growth curves with a common Moffat profile.
 
@@ -82,9 +103,10 @@ class Fitter:
         Output of :func:`gcphotom.aperture.extract_growth_curves`, which always
         contains ``radius``, ``flux``, ``background_var``, ``flux_clean``, and
         ``contamination``. The fitter uses ``flux_clean`` for the data to fit.
-    model : callable, optional
-        Model function ``f(params, radii) -> cumulative_flux``.
-        Defaults to :func:`moffat_model`.
+    object_model : callable, optional
+        Function ``f(params, radii) -> cumulative_object_flux`` that returns
+        the cumulative flux of the object alone (no background contribution).
+        Defaults to :func:`moffat_object_flux`.
 
     Attributes
     ----------
@@ -96,13 +118,13 @@ class Fitter:
         the input order when sources have been dropped.
     """
 
-    def __init__(self, gc_result, model=None):
-        if model is None:
-            model = moffat_model
+    def __init__(self, gc_result, object_model=None):
+        if object_model is None:
+            object_model = moffat_object_flux
 
         self.radii = jnp.array(gc_result["radius"])
         self.areas = annular_fluxes(self.radii**2 * jnp.pi)
-        self.model = model
+        self.object_model = object_model
         self.estimate = None
         n = len(gc_result["flux"])
         self._orig_n = n
@@ -138,10 +160,31 @@ class Fitter:
         """Scale flux by the estimate factor from initial guess."""
         return {**params, "flux": params["flux"] * self.estimate}
 
+    def _background_cumulative(self, back):
+        """Cumulative background flux at each radius: back * pi * r^2."""
+        return back[None, :] * self.radii[:, None] ** 2 * jnp.pi
+
+    def model(self, params):
+        """Full cumulative model including background.
+
+        Parameters
+        ----------
+        params : dict
+            Parameters with keys ``flux``, ``gamma``, ``alpha``, ``back``.
+
+        Returns
+        -------
+        cum_flux : 2D array (n_radii, n_sources)
+            Cumulative model flux at each radius.
+        """
+        scaled = self._flux(params)
+        object_cum = self.object_model(scaled, self.radii)
+        return object_cum + self._background_cumulative(scaled["back"])
+
     def residuals(self, params, mask=False):
         """Annular residuals: data - model."""
-        m = self.model(self._flux(params), self.radii)
-        r = self.fluxes - annular_fluxes(m)
+        m = annular_fluxes(self.model(params))
+        r = self.fluxes - m
         if mask:
             return r.at[~self.goods].set(jnp.nan)
         return r
@@ -149,13 +192,18 @@ class Fitter:
     def weighted_residuals(self, params, mask=False):
         """Weighted annular residuals.
 
-        The noise estimate combines object photon noise (Poisson variance
-        approximated by the model annular flux) with the a priori background
-        variance from the growth curve extraction.
+        The noise estimate uses only the object photon noise (Poisson
+        variance approximated by the object-only annular flux), combined
+        with the a priori background variance. The background contribution
+        is added back for the residual itself.
         """
-        m = annular_fluxes(self.model(self._flux(params), self.radii))
-        residuals = self.fluxes - m
-        noise = jnp.maximum(self.bkg_var + m, 1e-30)
+        scaled = self._flux(params)
+        object_cum = self.object_model(scaled, self.radii)
+        object_ann = annular_fluxes(object_cum)
+        back_ann = annular_fluxes(self._background_cumulative(scaled["back"]))
+        total_ann = object_ann + back_ann
+        residuals = self.fluxes - total_ann
+        noise = jnp.maximum(object_ann + self.bkg_var, 1e-30)
         r = residuals / jnp.sqrt(noise) * self.goods
         if mask:
             return r.at[~self.goods].set(jnp.nan)
@@ -297,8 +345,8 @@ class Fitter:
         ax1.plot(
             self.radii,
             annular_fluxes(
-                self.model(
-                    {**bf, "flux": np.array([1.0]), "back": np.array([0.0])},
+                self.object_model(
+                    {**bf, "flux": np.array([1.0])},
                     self.radii,
                 )
             ),
