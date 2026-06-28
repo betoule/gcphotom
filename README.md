@@ -58,6 +58,23 @@ plt.plot(input_cat['flux'], fitted['flux'] / input_cat['flux'], 'o')
 
 The `segmentation_image` enables contamination estimation by masking out neighboring sources. The result always includes `flux_clean` and `contamination`. When no segmentation is provided, `flux_clean` equals `flux` and `contamination` is zero. Cross-matching detected and simulated catalogs returns a matched table of the same length as the detected catalog (NaNs for unmatched). `Fitter.results` always returns per-source arrays aligned to the original input length (NaNs for internally dropped sources).
 
+# CLI
+
+A command-line interface is provided for processing survey forced-photometry catalogs:
+
+```bash
+# Match and show statistics
+gcphotom snls match "catalog_forced_D1_g_*.npy" \
+    --reference avg_cat_D1.npy --band g --min-flux 10000
+
+# Fit growth curves and save results
+gcphotom snls process "catalog_forced_D1_g_*.npy" \
+    --reference avg_cat_D1.npy --band g --min-flux 10000 \
+    --output-dir ./mophot/ --learning-rate 1e-2 --niter 2000
+```
+
+The `snls` subcommand loads SNLS forced-photometry catalogs (record arrays with `apfl_*`, `apvar_*`, `apother_*` columns), selects star entries by matching against a reference catalog via the `bindex` field, and fits a Moffat growth-curve model to each source. Fitted columns (`mflux`, `mback`, `mgoods`, `mchi2`) are appended to the catalog and saved as `.npy`.
+
 # Why gcphotom?
 
 Traditional aperture photometry often requires manual aperture corrections, suffer from aperture contamination from neighboring objects, and is suboptimal for faint objects due to background noise. On the other hand PSF photometry is typically limited to small radii so that accurate reconstruction of the total flux is difficult due to poor constraints on the PSF tails. `gcphotom` solves this by fitting the observed growth curve to a Moffat analytical profile, providing a robust estimate of total flux while remaining computationally efficient.
