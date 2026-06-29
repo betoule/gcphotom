@@ -229,7 +229,7 @@ class Fitter:
             initial_guess = self.initial_guess()
 
         if loss is None:
-            loss_fn_ = jaxfitter.tukey(c=4.685)
+            loss_fn_ = jaxfitter.pseudo_huber(c=2.0)
         else:
             loss_fn_ = loss
 

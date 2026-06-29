@@ -132,15 +132,27 @@ def cauchy(c=1.0):
     return loss
 
 
+def nmad(arr):
+    """Normalized Median Absolute Deviation, implemented in JAX.
+
+    ``1.4826 * median(|arr - median(arr)|)``, a robust estimate of the
+    standard deviation of *arr*.
+    """
+    med = jnp.median(arr)
+    return 1.4826 * jnp.median(jnp.abs(arr - med))
+
+
 def parameter_uncertainty(weighted_residuals_fn, params):
     """Parameter covariance via the Jacobian of weighted residuals.
 
     Uses
-        Cov = (J_wr^T J_wr)^{-1}  scaled by chi2/dof
+        Cov = (J_wr^T J_wr)^{-1}  scaled by nmad(wr)^2
 
     where J_wr = ∂wr/∂p is the Jacobian of the weighted residuals at the
     best-fit point.  For well-fitting models J_wr ≈ -diag(1/σ) · J, so
-    J_wr^T J_wr ≈ J^T W J.
+    J_wr^T J_wr ≈ J^T W J.  Scaling by the squared NMAD of the weighted
+    residuals provides a robust alternative to the classical chi2/dof
+    scaling that is less sensitive to outlier-contaminated fits.
 
     Parameters
     ----------
@@ -176,10 +188,7 @@ def parameter_uncertainty(weighted_residuals_fn, params):
     J = jax.jacfwd(flat_fn)(p0)
     JTJ = J.T @ J
     cov = jnp.linalg.inv(JTJ)
-
-    chi2 = jnp.sum(wr**2)
-    dof = n_good - n_params
-    cov = jnp.where(dof > 0, cov * (chi2 / dof), cov)
+    cov = cov * nmad(wr) ** 2
 
     se_flat = jnp.sqrt(jnp.diag(cov))
     leaves, treedef = jax.tree_util.tree_flatten(params)

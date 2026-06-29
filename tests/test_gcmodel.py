@@ -412,7 +412,7 @@ class TestRobustLoss:
         assert float(result[1]) == pytest.approx(3.0**2 / 6)
 
     def test_fit_default_loss(self, small_sim):
-        """Default fit uses Tukey bisquare and converges."""
+        """Default fit uses Pseudo-Huber and converges."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
         gc = gcp.extract_growth_curves(img, positions)
@@ -554,14 +554,14 @@ class TestParameterUncertainty:
 
         cov, se = parameter_uncertainty(wr_fn, params)
 
-        # Expected: (A^T W A)^{-1} * chi2/dof
+        # Expected: (A^T W A)^{-1} * nmad(wr)^2
         w = 1.0 / sigma**2
         A = jnp.column_stack([x, jnp.ones_like(x)])
         expected = jnp.linalg.inv((A * w[:, None]).T @ A)
         wr = wr_fn(params)
-        chi2 = float(jnp.sum(wr**2))
-        dof = len(wr) - 2
-        expected *= chi2 / dof
+        med = jnp.median(wr)
+        nmad_val = 1.4826 * jnp.median(jnp.abs(wr - med))
+        expected *= float(nmad_val**2)
 
         np.testing.assert_allclose(cov, expected, atol=1e-6)
         assert "a" in se
