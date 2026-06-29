@@ -53,7 +53,7 @@ input_cat = gcp.cross_match(det_cat, sim_cat)
 
 # 6. Inspect results
 print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
-plt.plot(input_cat['flux'], fitted['flux'] / input_cat['flux'], 'o')
+plt.errorbar(input_cat['flux'], fitted['flux'] / input_cat['flux'], fitted['std_errors']['flux']/input_cat['flux'], marker='o', ls='None')
 ```
 
 The `segmentation_image` enables contamination estimation by masking out neighboring sources. The result always includes `flux_clean` and `contamination`. When no segmentation is provided, `flux_clean` equals `flux` and `contamination` is zero. Cross-matching detected and simulated catalogs returns a matched table of the same length as the detected catalog (NaNs for unmatched). `Fitter.results` always returns per-source arrays aligned to the original input length (NaNs for internally dropped sources).

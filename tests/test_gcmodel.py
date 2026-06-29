@@ -153,22 +153,84 @@ class TestFitterInit:
         assert np.all(np.isnan(res["back"]))
         assert res["gamma"] == float(bf["gamma"])
 
-    def test_results_length_mismatch(self, small_sim):
+    def test_rescale_params_produces_physical_flux(self, small_sim):
+        """rescale_params correctly reverses flux normalization."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
         gc = gcp.extract_growth_curves(img, positions)
         f = gcp.Fitter(gc)
         bf, _ = f.fit(niter=500)
-        # Pass bf with wrong-length arrays to trigger fallback
-        bf_bad = {
-            "gamma": bf["gamma"],
-            "alpha": bf["alpha"],
-            "flux": np.ones(len(positions) + 10),
-            "back": np.ones(len(positions) + 10),
-        }
-        res = f.results(bf_bad)
-        assert not np.all(np.isnan(res["flux"]))
-        assert len(res["flux"]) == len(positions)
+        rp = f.rescale_params(bf)
+
+        n_cur = f.fluxes.shape[1]
+        assert len(rp["flux"]) == n_cur
+        assert len(rp["back"]) == n_cur
+        assert isinstance(rp["gamma"], float)
+        assert isinstance(rp["alpha"], float)
+        assert rp["gamma"] == float(bf["gamma"])
+        assert rp["alpha"] == float(bf["alpha"])
+
+    def test_rescale_params_includes_std_errors(self, small_sim):
+        """rescale_params includes std_errors with rescaled flux uncertainty."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=500)
+        rp = f.rescale_params(bf)
+
+        assert "std_errors" in rp
+        se = rp["std_errors"]
+        n_cur = f.fluxes.shape[1]
+        assert len(se["flux"]) == n_cur
+
+    def test_expand_to_original_length(self, small_sim):
+        """expand_to_original returns arrays of original input length."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        n_orig = f._orig_n
+        n_cur = f.fluxes.shape[1]
+
+        # before additional cuts, all current sources are non-NaN in output
+        arr = np.arange(n_cur, dtype=float)
+        expanded = f.expand_to_original(arr)
+        assert len(expanded) == n_orig
+
+        # after cutting some sources, the dropped ones should be NaN
+        f.goods = f.goods.at[0, :].set(False)  # drop first annular bin for all
+        f._cut()
+        n_cur2 = f.fluxes.shape[1]
+        expanded2 = f.expand_to_original(np.arange(n_cur2, dtype=float))
+        assert len(expanded2) == n_orig
+        if n_cur2 < n_cur:
+            assert np.any(np.isnan(expanded2))
+
+    def test_goodness_returns_ngoods_and_chi2(self, small_sim):
+        """goodness returns ngoods and chi2 per source."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=500)
+        g = f.goodness(bf)
+
+        n_cur = f.fluxes.shape[1]
+        assert "ngoods" in g
+        assert "chi2" in g
+        assert len(g["ngoods"]) == n_cur
+        assert len(g["chi2"]) == n_cur
+
+    def test_goodness_finite_chi2(self, small_sim):
+        """goodness chi2 values are finite."""
+        img, cat = small_sim
+        positions = np.column_stack([cat["x"], cat["y"]])
+        gc = gcp.extract_growth_curves(img, positions)
+        f = gcp.Fitter(gc)
+        bf, _ = f.fit(niter=500)
+        g = f.goodness(bf)
+        assert np.all(np.isfinite(g["chi2"]))
 
     def test_chi2_method(self, small_sim):
         """Direct chi2 call covers the standalone chi2() method."""
@@ -291,16 +353,15 @@ class TestFitterHelpers:
         gc = gcp.extract_growth_curves(img, positions)
         f = gcp.Fitter(gc)
         bf, _ = f.fit(niter=1000)
-        res_before = f.results(bf)
         n_before = len(positions)
-        assert len(res_before["flux"]) == n_before
         f.detect_contamination(bf)
-        # results uses current .kept to expand; we call with prior bf
-        res_after = f.results(bf)
+        # re-fit after contamination to get a consistent bf
+        bf2, _ = f.fit(niter=1000)
+        res_after = f.results(bf2)
         assert len(res_after["flux"]) == n_before
-        # some entries may be NaN where sources were dropped
-        if int(f.goods.sum()) < n_before:
-            assert np.any(~np.isfinite(res_after["flux"]))
+        # entries are NaN where sources were dropped
+        if n_before > f.fluxes.shape[1]:
+            assert np.any(np.isnan(res_after["flux"]))
 
     def test_plot_psf_returns_axes(self, small_sim):
         img, cat = small_sim
@@ -448,7 +509,12 @@ class TestUncertainty:
         se = result["std_errors"]
         for key in bf:
             assert key in se
-            assert np.shape(se[key]) == np.shape(bf[key])
+        # per-source arrays are expanded to original length
+        assert len(se["flux"]) == len(result["flux"])
+        assert len(se["back"]) == len(result["back"])
+        # scalar params match shapes exactly
+        assert np.shape(se["gamma"]) == np.shape(bf["gamma"])
+        assert np.shape(se["alpha"]) == np.shape(bf["alpha"])
 
     def test_std_errors_finite_positive(self, small_sim):
         """Standard errors are finite and positive."""

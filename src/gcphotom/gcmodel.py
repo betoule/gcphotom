@@ -328,8 +328,132 @@ class Fitter:
         self.goods = self.goods & (jnp.abs(wr) < 5)
         self._cut()
 
+    def rescale_params(self, bf):
+        """Rescale normalized fit parameters to physical units.
+
+        During fitting, the flux parameter is normalized by
+        ``self.estimate`` to keep all parameters near unity for numerical
+        stability. This method reverses that scaling and propagates
+        uncertainties.
+
+        Parameters
+        ----------
+        bf : dict
+            Best-fit parameters (returned by :meth:`fit`).
+
+        Returns
+        -------
+        dict with keys ``flux``, ``back``, ``gamma``, ``alpha``, and
+        ``std_errors`` (when :meth:`fit` has been called). Per-source
+        arrays have the current (possibly truncated) length.
+        """
+        n_cur = (
+            int(self.fluxes.shape[1])
+            if getattr(self, "fluxes", None) is not None
+            else 0
+        )
+
+        if n_cur == 0:
+            result = {
+                "flux": np.array([]),
+                "back": np.array([]),
+                "gamma": float(bf["gamma"]),
+                "alpha": float(bf["alpha"]),
+            }
+            if hasattr(self, "_std_errors") and self._std_errors is not None:
+                result["std_errors"] = self._std_errors
+            return result
+
+        est = (
+            np.asarray(self.estimate, dtype=float)
+            if self.estimate is not None
+            else np.ones(n_cur)
+        )
+
+        flux = np.asarray(bf["flux"], dtype=float)
+        back = np.asarray(bf.get("back", np.zeros(n_cur)), dtype=float)
+        gamma = float(bf["gamma"])
+        alpha = float(bf["alpha"])
+
+        result = {
+            "flux": flux * est,
+            "back": back,
+            "gamma": gamma,
+            "alpha": alpha,
+        }
+
+        if hasattr(self, "_std_errors") and self._std_errors is not None:
+            se = self._std_errors
+            result["std_errors"] = {
+                k: (se[k] * est if k == "flux" else se[k]) for k in se
+            }
+
+        return result
+
+    def expand_to_original(self, arr):
+        """Expand a per-source array to the original input length.
+
+        Sources dropped by :meth:`_cut` or :meth:`detect_contamination`
+        are filled with NaN.
+
+        Parameters
+        ----------
+        arr : ndarray
+            Per-source array of current length.
+
+        Returns
+        -------
+        ndarray of length ``_orig_n`` with NaN for dropped sources.
+        """
+        n = getattr(self, "_orig_n", 0)
+        kept = np.asarray(self.kept)
+        full = np.full(n, np.nan, dtype=float)
+        if np.any(kept):
+            full[kept] = np.asarray(arr, dtype=float)
+        return full
+
+    def goodness(self, bf):
+        """Compute per-source ngoods and chi2.
+
+        Parameters
+        ----------
+        bf : dict
+            Best-fit parameters with normalized flux.
+
+        Returns
+        -------
+        dict with keys ``ngoods`` and ``chi2``.
+        """
+        n_cur = (
+            int(self.fluxes.shape[1])
+            if getattr(self, "fluxes", None) is not None
+            else 0
+        )
+
+        if n_cur == 0:
+            return {"ngoods": np.array([]), "chi2": np.array([])}
+
+        unit = np.asarray(bf["flux"], dtype=float)
+        bck = np.asarray(bf.get("back", np.zeros(n_cur)), dtype=float)
+
+        tmp_bf = {
+            "flux": unit,
+            "back": bck,
+            "gamma": float(bf["gamma"]),
+            "alpha": float(bf["alpha"]),
+        }
+
+        ngoods = np.asarray(self.goods.sum(axis=0))
+        wr = self.weighted_residuals(tmp_bf, mask=True)
+        chi2 = np.nansum(np.asarray(wr) ** 2, axis=0)
+
+        return {"ngoods": ngoods, "chi2": chi2}
+
     def results(self, bf):
         """Extract fitted results as a dictionary.
+
+        Convenience method combining :meth:`rescale_params`,
+        :meth:`goodness`, and :meth:`expand_to_original`.
 
         Parameters
         ----------
@@ -345,108 +469,17 @@ class Fitter:
         sources (via internal cuts or detect_contamination) are represented
         by NaN.
         """
-        n = getattr(self, "_orig_n", 0)
-        n_cur = (
-            int(self.fluxes.shape[1])
-            if getattr(self, "fluxes", None) is not None
-            else 0
-        )
-        kept = np.asarray(self.kept)
+        res = self.rescale_params(bf)
+        g = self.goodness(bf)
 
-        if n_cur == 0:
-            full = lambda: np.full(n, np.nan)
-            g = (
-                float(bf.get("gamma", np.nan))
-                if isinstance(bf, dict)
-                else float(getattr(bf, "gamma", np.nan))
-            )
-            a = (
-                float(bf.get("alpha", np.nan))
-                if isinstance(bf, dict)
-                else float(getattr(bf, "alpha", np.nan))
-            )
-            return {
-                "flux": full(),
-                "back": full(),
-                "gamma": g,
-                "alpha": a,
-                "ngoods": full(),
-                "chi2": full(),
-            }
+        for k in ("ngoods", "chi2"):
+            res[k] = self.expand_to_original(g[k])
+        for k in ("flux", "back"):
+            res[k] = self.expand_to_original(res[k])
 
-        # safe unit vectors matching current kept count
-        unit = np.asarray(
-            bf.get("flux", np.ones(n_cur)) if isinstance(bf, dict) else np.ones(n_cur),
-            dtype=float,
-        )
-        if len(unit) != n_cur:
-            unit = np.ones(n_cur)
-        bck = np.asarray(
-            (
-                bf.get("back", np.zeros(n_cur))
-                if isinstance(bf, dict)
-                else np.zeros(n_cur)
-            ),
-            dtype=float,
-        )
-        if len(bck) != n_cur:
-            bck = np.zeros(n_cur)
+        if "std_errors" in res:
+            for k in ("flux", "back"):
+                if k in res["std_errors"]:
+                    res["std_errors"][k] = self.expand_to_original(res["std_errors"][k])
 
-        est = np.asarray(self.estimate) if self.estimate is not None else np.ones(n_cur)
-        if len(est) != n_cur:
-            est = np.ones(n_cur)
-
-        red_flux = unit * est
-        red_back = bck
-
-        # compute ngoods/chi2 using current internal state + consistent tmp bf
-        tmp_bf = {
-            "flux": unit,
-            "back": bck,
-            "gamma": (
-                bf.get("gamma", 3.0)
-                if isinstance(bf, dict)
-                else getattr(bf, "gamma", 3.0)
-            ),
-            "alpha": (
-                bf.get("alpha", 3.0)
-                if isinstance(bf, dict)
-                else getattr(bf, "alpha", 3.0)
-            ),
-        }
-        ngoods = self.goods.sum(axis=0)
-        wr = self.weighted_residuals(tmp_bf, mask=True)
-        chi2 = np.nansum(wr**2, axis=0)
-
-        full_flux = np.full(n, np.nan)
-        full_back = np.full(n, np.nan)
-        full_ng = np.full(n, np.nan)
-        full_chi = np.full(n, np.nan)
-        if np.any(kept):
-            full_flux[kept] = red_flux
-            full_back[kept] = red_back
-            full_ng[kept] = ngoods
-            full_chi[kept] = chi2
-
-        g = (
-            float(bf.get("gamma", np.nan))
-            if isinstance(bf, dict)
-            else float(getattr(bf, "gamma", np.nan))
-        )
-        a = (
-            float(bf.get("alpha", np.nan))
-            if isinstance(bf, dict)
-            else float(getattr(bf, "alpha", np.nan))
-        )
-        result = {
-            "flux": full_flux,
-            "back": full_back,
-            "gamma": g,
-            "alpha": a,
-            "ngoods": full_ng,
-            "chi2": full_chi,
-        }
-        if hasattr(self, "_std_errors"):
-            result["std_errors"] = self._std_errors
-
-        return result
+        return res
