@@ -132,40 +132,64 @@ def cauchy(c=1.0):
     return loss
 
 
-def loss_derivatives(loss_fn):
-    """Return (psi, psi_deriv) for any differentiable element-wise loss.
+def parameter_uncertainty(weighted_residuals_fn, params):
+    """Parameter covariance via the Jacobian of weighted residuals.
 
-    ``psi(x) = d(loss)/dx`` is the influence function.
-    ``psi_deriv(x) = d^2(loss)/dx^2`` is its derivative.
+    Uses
+        Cov = (J_wr^T J_wr)^{-1}  scaled by chi2/dof
 
-    Both functions are vectorized over the input array.
+    where J_wr = ∂wr/∂p is the Jacobian of the weighted residuals at the
+    best-fit point.  For well-fitting models J_wr ≈ -diag(1/σ) · J, so
+    J_wr^T J_wr ≈ J^T W J.
 
     Parameters
     ----------
-    loss_fn : callable
-        Loss function ``loss_fn(x) -> per-element loss`` where *x* is a 1-D
-        array of residuals and the output has the same shape.  Typical values
-        are the return values of :func:`tukey`, :func:`pseudo_huber`, or
-        :func:`cauchy`.
+    weighted_residuals_fn : callable
+        Function ``params -> 1-D array of weighted residuals (y - model)/σ``.
+        Only the good (fitted) data points should be returned.
+    params : pytree
+        Best-fit parameters (any structure compatible with
+        ``jax.flatten_util.ravel_pytree``).
 
     Returns
     -------
-    psi : callable
-        ``psi(x) -> per-element psi(x)``.
-    psi_deriv : callable
-        ``psi_deriv(x) -> per-element psi'(x)``.
+    cov : (n_params, n_params) ndarray
+        Covariance matrix in flattened-parameter space.
+    se : pytree
+        Standard errors with the same structure as *params*.
     """
+    from jax.flatten_util import ravel_pytree
 
-    def _element_loss(x_scalar):
-        return loss_fn(jnp.array([x_scalar]))[0]
+    wr = weighted_residuals_fn(params)
+    n_good = wr.shape[0]
 
-    psi_element = jax.grad(_element_loss)
-    psi_deriv_element = jax.grad(psi_element)
+    p0, unravel = ravel_pytree(params)
+    n_params = p0.size
 
-    def psi(x):
-        return jax.vmap(psi_element)(x)
+    if n_good <= n_params:
+        se = jax.tree_util.tree_map(lambda x: jnp.full_like(x, jnp.nan), params)
+        return jnp.full((n_params, n_params), jnp.nan), se
 
-    def psi_deriv(x):
-        return jax.vmap(psi_deriv_element)(x)
+    def flat_fn(pf):
+        return weighted_residuals_fn(unravel(pf))
 
-    return psi, psi_deriv
+    J = jax.jacfwd(flat_fn)(p0)
+    JTJ = J.T @ J
+    cov = jnp.linalg.inv(JTJ)
+
+    chi2 = jnp.sum(wr**2)
+    dof = n_good - n_params
+    cov = jnp.where(dof > 0, cov * (chi2 / dof), cov)
+
+    se_flat = jnp.sqrt(jnp.diag(cov))
+    leaves, treedef = jax.tree_util.tree_flatten(params)
+    se_leaves = []
+    start = 0
+    for leaf in leaves:
+        a = jnp.asarray(leaf)
+        size = a.size
+        se_leaves.append(se_flat[start : start + size].reshape(a.shape))
+        start += size
+    se = jax.tree_util.tree_unflatten(treedef, se_leaves)
+
+    return cov, se

@@ -8,7 +8,7 @@ from gcphotom.aperture import (
     extract_growth_curves,
 )
 from gcphotom.gcmodel import Fitter
-from gcphotom.jaxfitter import tukey, pseudo_huber, cauchy
+from gcphotom.jaxfitter import tukey, pseudo_huber, cauchy, parameter_uncertainty
 from gcphotom.simulator import (
     make_realistic_source_catalog,
     simulate_image,
@@ -25,6 +25,7 @@ __all__ = [
     "tukey",
     "pseudo_huber",
     "cauchy",
+    "parameter_uncertainty",
     "make_realistic_source_catalog",
     "make_test_source_catalog",
     "match",

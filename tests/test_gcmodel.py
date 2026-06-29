@@ -418,78 +418,33 @@ class TestRobustLoss:
         assert 0.4 < ratio < 2.0
 
 
-class TestLossDerivatives:
-    def test_chi2_psi(self):
-        """For chi-squared loss, psi(x) = 2x and psi'(x) = 2."""
-        from gcphotom.jaxfitter import loss_derivatives
-
-        loss = lambda x: x**2
-        psi, psi_deriv = loss_derivatives(loss)
-
-        x = jnp.array([0.0, 1.0, -2.0, 3.0])
-        np.testing.assert_allclose(psi(x), 2 * x)
-        np.testing.assert_allclose(psi_deriv(x), 2.0)
-
-    def test_tukey_psi_at_zero(self):
-        """At zero, Tukey psi(0)=0 and psi'(0)=1 (matching x^2/2 loss)."""
-        from gcphotom.jaxfitter import loss_derivatives
-
-        psi, psi_deriv = loss_derivatives(gcp.tukey(c=4.685))
-        assert float(psi(jnp.array([0.0]))[0]) == 0.0
-        assert float(psi_deriv(jnp.array([0.0]))[0]) == 1.0
-
-    def test_tukey_psi_large(self):
-        """For large residuals, Tukey psi goes to zero."""
-        from gcphotom.jaxfitter import loss_derivatives
-
-        psi, _ = loss_derivatives(gcp.tukey(c=4.685))
-        x_large = jnp.array([10.0, -10.0, 100.0])
-        np.testing.assert_allclose(psi(x_large), 0.0, atol=1e-10)
-
-
 class TestUncertainty:
-    def _fit_and_get_results(self, small_sim, **kw):
-        """Helper: fit and return results with given compute_errors options."""
+    def _fit_and_get_results(self, small_sim):
+        """Helper: fit and return results."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
         gc = gcp.extract_growth_curves(img, positions)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
-        return f.results(bf, **kw), f, bf
+        bf, extra = f.fit(niter=500)
+        return f.results(bf), f, bf, extra
 
-    def test_default_includes_std_errors(self, small_sim):
-        """Default compute_errors='diag' includes std_errors key."""
-        result, _, _ = self._fit_and_get_results(small_sim)
+    def test_results_includes_std_errors(self, small_sim):
+        """results always includes std_errors."""
+        result, *_ = self._fit_and_get_results(small_sim)
         assert "std_errors" in result
 
-    def test_no_errors_backward_compat(self, small_sim):
-        """compute_errors=False excludes uncertainty keys."""
-        result, _, _ = self._fit_and_get_results(small_sim, compute_errors=False)
-        assert "std_errors" not in result
-        assert "covariance" not in result
-
-    def test_none_equals_false(self, small_sim):
-        """compute_errors='none' behaves the same as False."""
-        result, _, _ = self._fit_and_get_results(small_sim, compute_errors="none")
-        assert "std_errors" not in result
-
-    def test_diag_excludes_covariance(self, small_sim):
-        """'diag' does not include covariance or correlation."""
-        result, _, _ = self._fit_and_get_results(small_sim, compute_errors="diag")
-        assert "std_errors" in result
-        assert "covariance" not in result
-        assert "correlation" not in result
-
-    def test_full_includes_cov_corr(self, small_sim):
-        """'full' includes covariance and correlation."""
-        result, _, _ = self._fit_and_get_results(small_sim, compute_errors="full")
-        assert "covariance" in result
-        assert "correlation" in result
-        assert result["covariance"].shape == result["correlation"].shape
+    def test_extra_contains_covariance(self, small_sim):
+        """extra (from fit) contains covariance and std_errors."""
+        _, _, _, extra = self._fit_and_get_results(small_sim)
+        assert "covariance" in extra
+        assert "std_errors" in extra
+        cov = extra["covariance"]
+        n = cov.shape[0]
+        assert cov.shape == (n, n)
 
     def test_std_errors_match_bf_structure(self, small_sim):
         """std_errors has same keys as the best-fit dict."""
-        result, f, bf = self._fit_and_get_results(small_sim)
+        result, f, bf = self._fit_and_get_results(small_sim)[:3]
         se = result["std_errors"]
         for key in bf:
             assert key in se
@@ -497,18 +452,11 @@ class TestUncertainty:
 
     def test_std_errors_finite_positive(self, small_sim):
         """Standard errors are finite and positive."""
-        result, f, bf = self._fit_and_get_results(small_sim)
+        result, f, bf = self._fit_and_get_results(small_sim)[:3]
         se = result["std_errors"]
         for key in bf:
             assert np.all(np.isfinite(np.asarray(se[key])))
             assert np.all(np.asarray(se[key]) > 0)
-
-    def test_uncertainty_robust_finite(self, small_sim):
-        """Robust=True gives a finite result (different from default)."""
-        result, f, bf = self._fit_and_get_results(small_sim, robust=True)
-        se = result["std_errors"]
-        for key in bf:
-            assert np.all(np.isfinite(np.asarray(se[key])))
 
     def test_uncertainty_after_contamination(self, small_sim):
         """Uncertainty still works after detect_contamination."""
@@ -523,15 +471,52 @@ class TestUncertainty:
         assert "std_errors" in result
         assert np.all(np.isfinite(np.asarray(result["std_errors"]["gamma"])))
 
-    def test_correlation_diagonal_one(self, small_sim):
-        """Correlation matrix has 1 on the diagonal."""
-        result, _, _ = self._fit_and_get_results(small_sim, compute_errors="full")
-        c = result["correlation"]
-        n = c.shape[0]
-        np.testing.assert_allclose(np.diag(c), 1.0, atol=1e-6)
 
-    def test_covariance_symmetric(self, small_sim):
-        """Covariance matrix is symmetric (float32 precision)."""
-        result, _, _ = self._fit_and_get_results(small_sim, compute_errors="full")
-        cov = result["covariance"]
-        np.testing.assert_allclose(cov, cov.T, atol=1e-6)
+class TestParameterUncertainty:
+    def test_linear_model(self):
+        """Known linear model: y = a*x + b with constant sigma."""
+        from gcphotom.jaxfitter import parameter_uncertainty
+
+        x = jnp.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        y = jnp.array([0.1, 2.1, 3.9, 6.2, 7.8])
+        sigma = jnp.full(5, 0.5)
+
+        params = {"a": jnp.array(2.0), "b": jnp.array(0.0)}
+
+        def wr_fn(p):
+            return (y - (p["a"] * x + p["b"])) / sigma
+
+        cov, se = parameter_uncertainty(wr_fn, params)
+
+        # Expected: (A^T W A)^{-1} * chi2/dof
+        w = 1.0 / sigma**2
+        A = jnp.column_stack([x, jnp.ones_like(x)])
+        expected = jnp.linalg.inv((A * w[:, None]).T @ A)
+        wr = wr_fn(params)
+        chi2 = float(jnp.sum(wr**2))
+        dof = len(wr) - 2
+        expected *= chi2 / dof
+
+        np.testing.assert_allclose(cov, expected, atol=1e-6)
+        assert "a" in se
+        assert "b" in se
+        assert float(se["a"]) > 0
+        assert float(se["b"]) > 0
+
+    def test_insufficient_data(self):
+        """Returns NaN when n_good <= n_params."""
+        from gcphotom.jaxfitter import parameter_uncertainty
+
+        x = jnp.array([1.0, 2.0])
+        y = jnp.array([1.0, 2.0])
+        sigma = jnp.ones(2)
+
+        params = {"a": jnp.array(1.0), "b": jnp.array(0.0)}  # 2 params, 2 data points
+
+        def wr_fn(p):
+            return (y - (p["a"] * x + p["b"])) / sigma
+
+        cov, se = parameter_uncertainty(wr_fn, params)
+        assert jnp.all(jnp.isnan(cov))
+        assert jnp.isnan(se["a"])
+        assert jnp.isnan(se["b"])
