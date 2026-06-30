@@ -21,19 +21,22 @@ class TestMad:
 class TestRobustAverage:
     def test_clean_data(self):
         vals = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        mean, var = robust_average(vals)
+        mean, var, n = robust_average(vals)
         assert np.isclose(mean, 3.0)
         assert var >= 0
+        assert n == 5
 
     def test_outliers_removed(self):
         vals = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 100.0])
-        mean, _ = robust_average(vals, clip=2.0)
+        mean, _, n = robust_average(vals, clip=2.0)
         assert np.isclose(mean, np.mean(vals[:5]), atol=0.5)
+        assert n == 5
 
     def test_constant(self):
-        mean, var = robust_average([5.0, 5.0, 5.0])
+        mean, var, n = robust_average([5.0, 5.0, 5.0])
         assert np.isclose(mean, 5.0)
         assert np.isclose(var, 0.0)
+        assert n == 3
 
 
 class TestGetBinIndices:
@@ -113,6 +116,72 @@ class TestBinStatistic:
         _, _, err = bin_statistic(x, y, nbins=5, weights=w, scale_err=False)
         assert len(err) == 5
         assert np.all(err >= 0)
+
+    def test_median_scale_err_is_se(self):
+        np.random.seed(42)
+        # 4 bins with exactly 25 points each
+        n_per = 25
+        x = np.concatenate(
+            [
+                np.full(n_per, 0.0),
+                np.full(n_per, 1.0),
+                np.full(n_per, 2.0),
+                np.full(n_per, 3.0),
+            ]
+        )
+        x = x + np.random.uniform(-0.1, 0.1, len(x))
+        y = np.random.randn(len(x))
+        bins = np.array([-0.5, 0.5, 1.5, 2.5, 3.5])
+        _, _, disp = bin_statistic(x, y, bins=bins, method="median", scale_err=False)
+        _, _, se = bin_statistic(x, y, bins=bins, method="median", scale_err=True)
+        n = n_per
+        factor = np.sqrt(np.pi / 2.0)
+        expected = disp * factor / np.sqrt(n)
+        np.testing.assert_allclose(se, expected, rtol=1e-8)
+
+    def test_sigma_clip_scale_err_uses_nkept(self):
+        np.random.seed(123)
+        n_clean = 30
+        n_out = 5
+        y_clean = np.random.randn(n_clean)
+        y_out = np.random.randn(n_out) * 10 + 50
+        y = np.concatenate([y_clean, y_out])
+        x = np.zeros(len(y))
+        bins = np.array([-0.5, 0.5])
+        _, _, disp = bin_statistic(
+            x, y, bins=bins, method="sigma_clip", scale_err=False, sigma_clip=3.0
+        )
+        _, _, se = bin_statistic(
+            x, y, bins=bins, method="sigma_clip", scale_err=True, sigma_clip=3.0
+        )
+        _, var, n_used = robust_average(y, clip=3.0)
+        assert n_used == n_clean
+        expected = np.sqrt(var) / np.sqrt(n_used)
+        np.testing.assert_allclose(se, expected, rtol=1e-8)
+
+    def test_weighted_mean_scale_err_correct(self):
+        np.random.seed(42)
+        # bin0: 10 pts w=2 -> sumw=20; bin1: 5 pts w=4 -> sumw=20
+        x = np.concatenate([np.zeros(10), np.ones(5)])
+        x = x + np.random.uniform(-0.01, 0.01, 15)
+        y = np.random.randn(15)
+        w = np.concatenate([np.full(10, 2.0), np.full(5, 4.0)])
+        bins = np.array([-0.5, 0.5, 1.5])
+        _, _, se = bin_statistic(x, y, bins=bins, weights=w, scale_err=True)
+        expected = np.array([1.0 / np.sqrt(20), 1.0 / np.sqrt(20)])
+        np.testing.assert_allclose(se, expected, rtol=1e-10)
+
+    def test_weighted_robust_scale_err_raises(self):
+        x = np.linspace(0, 5, 10)
+        y = np.random.randn(10)
+        w = np.ones(10)
+        for meth in ("median", "sigma_clip"):
+            try:
+                bin_statistic(x, y, nbins=2, weights=w, method=meth, scale_err=True)
+                raised = False
+            except ValueError:
+                raised = True
+            assert raised
 
     def test_log_bins(self):
         np.random.seed(42)

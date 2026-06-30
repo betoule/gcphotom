@@ -44,9 +44,11 @@ def binplot(
     sigma_clip : float
         Clip factor for ``method="sigma_clip"``.
     scale_err : bool
-        If True and method=="mean" (no weights), divide error by sqrt(N)
-        to get error on the mean. For "median" or "sigma_clip" this has
-        no effect (those return robust dispersion, not error-on-mean).
+        If True (default), return an estimate of the standard error on the
+        per-bin central value. For ``method="median"`` or ``"sigma_clip"``
+        this yields an SE for that robust estimator (not the dispersion).
+        For weighted robust methods with ``scale_err=True`` a ValueError
+        is raised. If False, a dispersion measure is returned instead.
     data : bool
         If True, overlay raw data points on the plot.
     dotkeys : dict or None
