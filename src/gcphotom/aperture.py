@@ -186,7 +186,8 @@ def detect_and_segment(image, background=None, n_sigma=3.0, n_pixels=10, deblend
     n_pixels : int
         Minimum number of connected pixels for a valid source.
     deblend : bool
-        If ``True``, run ``deblend_sources`` to separate overlapping sources.
+        If ``True`` (default), run ``deblend_sources`` to separate overlapping
+        sources using photutils' deblender.
 
     Returns
     -------
@@ -200,17 +201,14 @@ def detect_and_segment(image, background=None, n_sigma=3.0, n_pixels=10, deblend
     seg = detect_sources(subtracted, threshold, n_pixels=n_pixels)
 
     if deblend:
-        try:
-            seg = deblend_sources(
-                subtracted,
-                seg,
-                n_pixels=n_pixels,
-                n_levels=32,
-                contrast=0.001,
-                progress_bar=False,
-            )
-        except (ModuleNotFoundError, ImportError):
-            pass  # skimage not available; skip deblending
+        seg = deblend_sources(
+            subtracted,
+            seg,
+            n_pixels=n_pixels,
+            n_levels=32,
+            contrast=0.001,
+            progress_bar=False,
+        )
 
     catalog = SourceCatalog(subtracted, seg)
 

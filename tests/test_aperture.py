@@ -281,14 +281,10 @@ class TestExtractGrowthCurvesCatalogInput:
         with pytest.raises(TypeError):
             extract_growth_curves(img, bad)
 
-    def test_deblend_import_error_path(self, controlled_catalog, monkeypatch):
-        img = controlled_catalog([(60, 60)])
-        # force deblend_sources to raise ImportError to hit except
-        import gcphotom.aperture as ap
-
-        def _boom(*a, **k):
-            raise ImportError("no skimage")
-
-        monkeypatch.setattr(ap, "deblend_sources", _boom)
-        seg, cat = detect_and_segment(img, deblend=True)
-        assert len(cat) >= 1  # still detects without deblend
+    def test_deblend_splits_close_pair(self, controlled_catalog):
+        # two sources ~6 px apart form a single blob without deblending
+        img = controlled_catalog([(60, 60), (66, 60)], flux=1e5)
+        seg_no, cat_no = detect_and_segment(img, background=100, deblend=False)
+        assert len(cat_no) == 1
+        seg_yes, cat_yes = detect_and_segment(img, background=100, deblend=True)
+        assert len(cat_yes) == 2

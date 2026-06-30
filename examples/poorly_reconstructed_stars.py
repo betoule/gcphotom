@@ -1,17 +1,21 @@
 import gcphotom as gcp, numpy as np
+from gcphotom.plots import binplot
 import matplotlib.pyplot as plt
+from photutils.detection import DAOStarFinder
 
 # 1. Simulate a realistic astronomical image
 image, sim_cat = gcp.simulate_image(n_sources=1000, background=100, read_noise=5)
 
 # 2. Detect sources and build segmentation image (now takes care of background estimation)
-seg, det_cat = gcp.detect_and_segment(image)
+seg, det_cat = gcp.detect_and_segment(image, n_pixels=5)
+#let's kill unrecognized blends
+bads = (det_cat.ellipticity*det_cat.area).value > 6
 
 # 3. Extract growth curves with contamination estimation (takes care of error estimation)
 cog = gcp.extract_growth_curves(image, det_cat, segmentation_image=seg)
 
 # 4. Fit all growth curves
-fitter = gcp.Fitter(cog)
+fitter = gcp.Fitter(cog, bads=bads)
 best_fit, extra = fitter.fit()
 fitter.detect_contamination(best_fit)
 best_fit, extra = fitter.fit()
@@ -23,11 +27,12 @@ input_cat = gcp.cross_match(det_cat, sim_cat)
 # 6. Inspect results
 print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
 
+
 poorly = (
     np.abs(fitted["flux"] / input_cat["flux"] - 1)
-    > 3 * fitted["std_errors"]["flux"] / input_cat["flux"]
+    > 4 * fitted["std_errors"]["flux"] / input_cat["flux"]
 )
-bad = (fitted["ngoods"] < 5) & (fitted["chi2"] > 10 * fitted["ngoods"])
+bad = (fitted["ngoods"] < 5) & (fitted["chi2"] > 10 * fitted["ngoods"]) 
 unrecognized = poorly & ~bad
 
 plt.figure("Flux reconstruction")
@@ -39,6 +44,7 @@ for index in ~poorly, poorly:
         marker="o",
         ls="None",
     )
+binplot(input_cat["flux"], ((fitted["flux"] / input_cat["flux"]) - 1) * 100, data=False, method='median', color='k', zorder=10)
 plt.xlabel("Simulated flux [ADU]")
 plt.ylabel("Reconstruction error [%]")
 plt.xscale("log")
@@ -72,8 +78,8 @@ def crop(image, center=None, width=(100, 100)):
         center = image.shape[0] // 2, image.shape[1] // 2
     else:
         center = (int(center[0]), int(center[1]))
-    a, b = max(0, center[0] - width[0]), min(image.shape[0], center[0] + width[0])
-    c, d = max(0, center[1] - width[1]), min(image.shape[1], center[1] + width[1])
+    a, b = max(0, center[1] - width[0]), min(image.shape[0], center[1] + width[0])
+    c, d = max(0, center[0] - width[1]), min(image.shape[1], center[0] + width[1])
     return image[a:b, c:d], a, b, c, d
 
 
@@ -87,5 +93,6 @@ def show(s):
     ax1.plot(s["x"] - c, s["y"] - a, "rx")
     ax1.set_ylim(0, b - a)
     ax2.set_xlim(0, d - c)
+    ax1.set_title(f'{s["x"]:.1f}, {s["y"]:.1f}: {s["flux"]:.2f}')
 
     # plt.plot(input_cat['x'][unrecognized], input_cat['y'][unrecognized], 'r+')

@@ -93,7 +93,7 @@ class Fitter:
         the input order when sources have been dropped.
     """
 
-    def __init__(self, gc_result, object_model=None):
+    def __init__(self, gc_result, object_model=None, bads=None):
         if object_model is None:
             object_model = moffat_object_flux
 
@@ -105,7 +105,7 @@ class Fitter:
         self._orig_n = n
         self.kept = np.ones(n, dtype=bool)
         self._set_data(gc_result)
-        self._cut()
+        self._cut(bads)
 
     def _set_data(self, gc_result):
         """Extract annular fluxes and background variances from cumulative growth curves.
@@ -120,9 +120,11 @@ class Fitter:
         self.bkg_var = jnp.clip(self.bkg_var, 1e-30, None)
         self.goods = jnp.isfinite(self.fluxes) & jnp.isfinite(self.bkg_var)
 
-    def _cut(self):
-        """Remove sources with fewer than 2 good data points."""
-        valid = np.asarray(self.goods.sum(axis=0) > 1)
+    def _cut(self, bads=None):
+        """Remove sources with fewer than 2 good data points, and close contaminants."""
+        valid = np.asarray(self.goods.sum(axis=0) > 1) & self.goods[:3,:].any()
+        if bads is not None:
+            valid &= ~bads
         self.kept = np.asarray(self.kept)
         self.kept[self.kept] = valid
         if getattr(self, "estimate", None) is not None:

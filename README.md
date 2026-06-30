@@ -22,7 +22,9 @@ cd gcphotom
 uv sync --all-extras --dev
 ```
 
-**Dependencies** (core): `jax`, `jaxlib`, `astropy`, `numpy`, `photutils`. GPU support requires the appropriate JAX CUDA/Metal/ROCM installation.
+**Dependencies** (core): `jax`, `jaxlib`, `astropy`, `numpy`, `photutils`, `scipy`. GPU support requires the appropriate JAX CUDA/Metal/ROCM installation.
+
+Deblending of overlapping sources (enabled by default in `detect_and_segment`) uses photutils' deblender, which may require the optional scikit-image dependency depending on the photutils installation.
 
 # Quick Start
 

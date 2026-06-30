@@ -15,6 +15,7 @@ dependencies = [
     "astropy>=6.0",
     "numpy>=1.24",
     "photutils>=1.10",
+    "scipy>=1.13",
     "typer>=0.9",
     "rich>=13.0",
 ]
@@ -75,3 +76,8 @@ source = ["gcphotom"]
 [tool.coverage.report]
 fail_under = 95
 show_missing = true
+
+[dependency-groups]
+dev = [
+    "scikit-image>=0.26.0",
+]
