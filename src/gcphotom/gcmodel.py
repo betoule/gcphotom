@@ -191,7 +191,13 @@ class Fitter:
         return jnp.mean(self.weighted_residuals(params) ** 2)
 
     def fit(
-        self, initial_guess=None, niter=10000, learning_rate=5e-3, show=False, loss=None
+        self,
+        initial_guess=None,
+        niter=10000,
+        learning_rate=5e-3,
+        show=False,
+        loss=None,
+        fix=None,
     ):
         """Fit using Adam optimizer with a robust M-estimator loss.
 
@@ -235,7 +241,13 @@ class Fitter:
         else:
             loss_fn_ = loss
 
-        loss_fn = jax.jit(lambda p: jnp.mean(loss_fn_(self.weighted_residuals(p))))
+        if fix is None:
+            wr = self.weighted_residuals
+        else:
+            for p in fix:
+                initial_guess.pop(p)
+            wr = lambda p: self.weighted_residuals({**p, **fix})
+        loss_fn = jax.jit(lambda p: jnp.mean(loss_fn_(wr(p))))
         bf, extra = jaxfitter.fit_adam(
             loss_fn, initial_guess, niter=niter, learning_rate=learning_rate, tol=None
         )
@@ -243,7 +255,7 @@ class Fitter:
             plt.plot(extra["loss"])
 
         extra["covariance"], extra["std_errors"] = jaxfitter.parameter_uncertainty(
-            lambda p: self.weighted_residuals(p)[self.goods], bf
+            lambda p: wr(p)[self.goods], bf
         )
         self._std_errors = extra["std_errors"]
         return bf, extra

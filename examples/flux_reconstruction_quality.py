@@ -19,8 +19,14 @@ fitter = gcp.Fitter(cog, bads=bads)
 best_fit, extra = fitter.fit(learning_rate=1e-2, niter=2000)
 fitter.detect_contamination(best_fit)
 best_fit, extra = fitter.fit(learning_rate=1e-2, niter=2000)
+best_fit_no_back, extra_no_back = fitter.fit(
+    learning_rate=1e-2,
+    niter=2000,
+    fix={"back": np.full(len(best_fit["back"]), np.mean(best_fit["back"]))},
+)
 # best_fit2, extra2 = fitter.fit()
 fitted = fitter.results(best_fit)
+fitted_no_back = fitter.results(best_fit_no_back)
 
 # 5. Match (return the matched reordered version of the sim_cat)
 input_cat = gcp.cross_match(det_cat, sim_cat)
@@ -42,7 +48,8 @@ for index in ~poorly, poorly:
         input_cat["flux"][index],
         ((fitted["flux"] / input_cat["flux"])[index] - 1) * 100,
         (fitted["std_errors"]["flux"] / input_cat["flux"])[index] * 100,
-        marker="o",
+        marker=".",
+        alpha=0.2,
         ls="None",
     )
 binplot(
@@ -54,12 +61,26 @@ binplot(
     zorder=10,
     logbins=True,
     scale_err=True,
+    label="estimated background",
+)
+binplot(
+    input_cat["flux"],
+    ((fitted_no_back["flux"] / input_cat["flux"]) - 1) * 100,
+    data=False,
+    method="median",
+    color="r",
+    zorder=10,
+    logbins=True,
+    scale_err=True,
+    label="no back",
 )
 plt.xlabel("Simulated flux [ADU]")
 plt.ylabel("Reconstruction error [%]")
 plt.xscale("log")
 plt.ylim(-2, 2)
 plt.axhline(0, color="k")
+plt.legend(loc="best", frameon=False)
+plt.savefig("reconstruction_quality.png")
 
 # plt.figure('Simulated image')
 # plt.imshow(image, norm='symlog')
