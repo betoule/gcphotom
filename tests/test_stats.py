@@ -113,3 +113,25 @@ class TestBinStatistic:
         _, _, err = bin_statistic(x, y, nbins=5, weights=w, scale_err=False)
         assert len(err) == 5
         assert np.all(err >= 0)
+
+    def test_log_bins(self):
+        np.random.seed(42)
+        x = np.logspace(0, 2, 100)
+        y = np.random.randn(100)
+        xbinned, yplot, yerr = bin_statistic(x, y, nbins=5, logbins=True)
+        assert len(xbinned) == 5
+        # bins should be strictly increasing and log-spaced
+        assert np.all(np.diff(xbinned) > 0)
+        # centers should be close to geometric means of edges
+        # (computed internally) - just sanity check range
+        assert xbinned[0] > 1.0 and xbinned[-1] < 100.0
+
+    def test_log_bins_requires_positive(self):
+        x = np.array([0.0, 1.0, 2.0])
+        y = np.array([1.0, 2.0, 3.0])
+        try:
+            bin_statistic(x, y, nbins=3, logbins=True)
+            raised = False
+        except ValueError:
+            raised = True
+        assert raised

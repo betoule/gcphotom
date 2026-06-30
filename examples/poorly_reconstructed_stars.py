@@ -8,8 +8,8 @@ image, sim_cat = gcp.simulate_image(n_sources=1000, background=100, read_noise=5
 
 # 2. Detect sources and build segmentation image (now takes care of background estimation)
 seg, det_cat = gcp.detect_and_segment(image, n_pixels=5)
-#let's kill unrecognized blends
-bads = (det_cat.ellipticity*det_cat.area).value > 6
+# let's kill unrecognized blends
+bads = (det_cat.ellipticity * det_cat.area).value > 6
 
 # 3. Extract growth curves with contamination estimation (takes care of error estimation)
 cog = gcp.extract_growth_curves(image, det_cat, segmentation_image=seg)
@@ -32,7 +32,7 @@ poorly = (
     np.abs(fitted["flux"] / input_cat["flux"] - 1)
     > 4 * fitted["std_errors"]["flux"] / input_cat["flux"]
 )
-bad = (fitted["ngoods"] < 5) & (fitted["chi2"] > 10 * fitted["ngoods"]) 
+bad = (fitted["ngoods"] < 5) & (fitted["chi2"] > 10 * fitted["ngoods"])
 unrecognized = poorly & ~bad
 
 plt.figure("Flux reconstruction")
@@ -44,10 +44,20 @@ for index in ~poorly, poorly:
         marker="o",
         ls="None",
     )
-binplot(input_cat["flux"], ((fitted["flux"] / input_cat["flux"]) - 1) * 100, data=False, method='median', color='k', zorder=10)
+binplot(
+    input_cat["flux"],
+    ((fitted["flux"] / input_cat["flux"]) - 1) * 100,
+    data=False,
+    method="median",
+    color="k",
+    zorder=10,
+    logbins=True,
+    scale_err=True,
+)
 plt.xlabel("Simulated flux [ADU]")
 plt.ylabel("Reconstruction error [%]")
 plt.xscale("log")
+plt.ylim(-2, 2)
 plt.axhline(0, color="k")
 
 # plt.figure('Simulated image')

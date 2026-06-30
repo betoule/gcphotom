@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from gcphotom.stats import bin_statistic
+from gcphotom.stats import _build_bins, bin_statistic
 
 
 def binplot(
@@ -9,6 +9,7 @@ def binplot(
     y,
     nbins=10,
     bins=None,
+    logbins=False,
     *,
     weights=None,
     method="mean",
@@ -34,6 +35,8 @@ def binplot(
         Number of bins (ignored if *bins* is provided).
     bins : array_like or None
         Explicit bin edges.
+    logbins : bool
+        If True, use logarithmically spaced bins (requires all x > 0).
     weights : array_like or None
         Per-point weights (1/sigma**2 for optimal Gaussian weighting).
     method : {"mean", "median", "sigma_clip"}
@@ -41,7 +44,9 @@ def binplot(
     sigma_clip : float
         Clip factor for ``method="sigma_clip"``.
     scale_err : bool
-        If True, divide error by sqrt(N) (error on the mean).
+        If True and method=="mean" (no weights), divide error by sqrt(N)
+        to get error on the mean. For "median" or "sigma_clip" this has
+        no effect (those return robust dispersion, not error-on-mean).
     data : bool
         If True, overlay raw data points on the plot.
     dotkeys : dict or None
@@ -76,17 +81,14 @@ def binplot(
 
     # Build bin edges if not provided
     if bins is None:
-        bins = np.linspace(
-            x_arr[valid].min(),
-            x_arr[valid].max() + abs(x_arr[valid].max()) * 1e-7,
-            nbins + 1,
-        )
+        bins = _build_bins(x_arr[valid], nbins, logbins=logbins)
 
     xbinned, yplot, yerr = bin_statistic(
         x,
         y,
         nbins=nbins,
         bins=bins,
+        logbins=logbins,
         weights=weights,
         method=method,
         sigma_clip=sigma_clip,

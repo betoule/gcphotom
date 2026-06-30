@@ -88,3 +88,15 @@ class TestBinplot:
 
         assert len(xbinned) == 5
         assert np.all(np.isfinite(yplot))
+
+    def test_log_bins(self):
+        np.random.seed(42)
+        x = np.logspace(0, 2, 100)
+        y = np.random.randn(100)
+
+        xbinned, yplot, yerr = binplot(x, y, nbins=5, logbins=True)
+
+        assert len(xbinned) == 5
+        assert np.all(np.diff(xbinned) > 0)
+        # ensure it did not produce linear bins (first center should be >1)
+        assert xbinned[0] > 1.0

@@ -122,7 +122,7 @@ class Fitter:
 
     def _cut(self, bads=None):
         """Remove sources with fewer than 2 good data points, and close contaminants."""
-        valid = np.asarray(self.goods.sum(axis=0) > 1) & self.goods[:3,:].any()
+        valid = np.asarray(self.goods.sum(axis=0) > 1) & self.goods[:3, :].any()
         if bads is not None:
             valid &= ~bads
         self.kept = np.asarray(self.kept)

@@ -72,11 +72,31 @@ def get_bin_indices(bin_labels):
     return result
 
 
+def _build_bins(x, nbins, logbins=False):
+    """Build bin edges.
+
+    x must be finite and for logbins=True all x > 0.
+    """
+    x = np.asarray(x)
+    xmin = x.min()
+    xmax = x.max()
+    if logbins:
+        if xmin <= 0:
+            raise ValueError("log-spaced bins require all x > 0")
+        if xmax > 0:
+            xmax = xmax * (1 + 1e-7)
+        else:
+            xmax = xmax + 1e-7
+        return np.logspace(np.log10(xmin), np.log10(xmax), nbins + 1)
+    return np.linspace(xmin, xmax + abs(xmax) * 1e-7, nbins + 1)
+
+
 def bin_statistic(
     x,
     y,
     nbins=10,
     bins=None,
+    logbins=False,
     *,
     weights=None,
     method="mean",
@@ -95,6 +115,8 @@ def bin_statistic(
         Number of bins (ignored if bins is provided).
     bins : array_like or None
         Explicit bin edges.
+    logbins : bool
+        If True, generate logarithmically spaced bins (requires x > 0).
     weights : array_like or None
         Per-point weights (1/sigma**2 for optimal Gaussian weighting).
     method : {"mean", "median", "sigma_clip"}
@@ -102,8 +124,12 @@ def bin_statistic(
     sigma_clip : float
         Clip factor for ``method="sigma_clip"``.
     scale_err : bool
-        If True, divide error by sqrt(N) to get error on the mean.
-        If False, return raw bin dispersion.
+        If True and method in {"mean"} (and no weights), divide error by
+        sqrt(N) to get error on the mean. For ``method="median"`` or
+        ``"sigma_clip"`` this parameter has no effect: those methods return
+        a robust dispersion measure (MAD or clipped std) and never scale
+        by sqrt(N). If False, raw bin dispersion is returned for the mean
+        case.
 
     Returns
     -------
@@ -128,7 +154,7 @@ def bin_statistic(
 
     # Build bins
     if bins is None:
-        bins = np.linspace(x.min(), x.max() + abs(x.max()) * 1e-7, nbins + 1)
+        bins = _build_bins(x, nbins, logbins=logbins)
 
     # Clip to bin range
     mask = (x >= bins.min()) & (x < bins.max())
