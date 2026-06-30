@@ -16,9 +16,10 @@ cog = gcp.extract_growth_curves(image, det_cat, segmentation_image=seg)
 
 # 4. Fit all growth curves
 fitter = gcp.Fitter(cog, bads=bads)
-best_fit, extra = fitter.fit()
+best_fit, extra = fitter.fit(learning_rate=1e-2, niter=2000)
 fitter.detect_contamination(best_fit)
-best_fit, extra = fitter.fit()
+best_fit, extra = fitter.fit(learning_rate=1e-2, niter=2000)
+# best_fit2, extra2 = fitter.fit()
 fitted = fitter.results(best_fit)
 
 # 5. Match (return the matched reordered version of the sim_cat)

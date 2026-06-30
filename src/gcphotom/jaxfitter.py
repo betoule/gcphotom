@@ -56,11 +56,17 @@ def fit_adam(
     losses = [func_(params)]
 
     timings = [0]
-    for i in range(niter):
+
+    @jax.jit
+    def step(params, opt_state):
         current_grads = grad_func(params)
         updates, opt_state = optimizer.update(current_grads, opt_state)
         params = optax.apply_updates(params, updates)
-        losses.append(func_(params))  # store the loss function
+        return params, func_(params), opt_state
+
+    for i in range(niter):
+        params, loss, opt_state = step(params, opt_state)
+        losses.append(loss)  # store the loss function
         timings.append(time.time() - tstart)
         if tol is not None and (i > 2 and ((losses[-2] - losses[-1]) < tol)):
             break
