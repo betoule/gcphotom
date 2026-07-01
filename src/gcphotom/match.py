@@ -276,12 +276,17 @@ def _get_xy(obj):
         if arr.ndim == 2 and arr.shape[1] == 2:
             return arr[:, 0], arr[:, 1]
     if hasattr(obj, "colnames"):
-        try:
-            x = np.asarray(obj["x"], dtype=float)
-            y = np.asarray(obj["y"], dtype=float)
-            return x, y
-        except (KeyError, TypeError, ValueError, IndexError):
-            pass
+        for x_key, y_key in (
+            ("x", "y"),
+            ("x_fit", "y_fit"),
+            ("x_init", "y_init"),
+        ):
+            try:
+                x = np.asarray(obj[x_key], dtype=float)
+                y = np.asarray(obj[y_key], dtype=float)
+                return x, y
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
     if hasattr(obj, "x_centroid") and hasattr(obj, "y_centroid"):
         x = np.asarray(obj.x_centroid, dtype=float)
         y = np.asarray(obj.y_centroid, dtype=float)

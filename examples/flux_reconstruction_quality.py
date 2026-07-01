@@ -34,6 +34,13 @@ input_cat = gcp.cross_match(det_cat, sim_cat)
 # 6. Inspect results
 print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
 
+# 7. PSF photometry baseline (empirical PSF)
+psf_results, epsf_res = gcp.psf_photometry(
+    image - 100, det_cat, nstars=30, fit_shape=11
+)
+print(f"ePSF: {epsf_res.iterations} iterations, converged={epsf_res.converged}")
+psf_cat = gcp.cross_match(psf_results, sim_cat)
+
 
 poorly = (
     np.abs(fitted["flux"] / input_cat["flux"] - 1)
@@ -73,6 +80,17 @@ binplot(
     logbins=True,
     scale_err=True,
     label="no back",
+)
+binplot(
+    psf_cat["flux"],
+    ((psf_results["flux_fit"] / psf_cat["flux"]) - 1) * 100,
+    data=False,
+    method="median",
+    color="b",
+    zorder=10,
+    logbins=True,
+    scale_err=True,
+    label="PSF photometry",
 )
 plt.xlabel("Simulated flux [ADU]")
 plt.ylabel("Reconstruction error [%]")

@@ -9,6 +9,7 @@ from gcphotom.aperture import (
 )
 from gcphotom.gcmodel import Fitter
 from gcphotom.jaxfitter import tukey, pseudo_huber, cauchy, parameter_uncertainty
+from gcphotom.psf_photometry import psf_photometry
 from gcphotom.simulator import (
     make_realistic_source_catalog,
     simulate_image,
