@@ -77,13 +77,14 @@ def psf_photometry(
     oversampling=1,
     aperture_radius=5.0,
     epsf_maxiters=10,
+    background=None,
 ):
     """Standard PSF photometry with an empirical PSF built from the image.
 
-    Estimates the background via ``sigma_clipped_stats`` and subtracts
-    it before building the ePSF and running photometry.  Builds an ePSF
-    from the brightest isolated stars, then fits all detected sources
-    using ``photutils.psf.PSFPhotometry``.
+    Subtracts the background (estimated or provided) before building the
+    ePSF and running photometry.  Builds an ePSF from the brightest
+    isolated stars, then fits all detected sources using
+    ``photutils.psf.PSFPhotometry``.
 
     Parameters
     ----------
@@ -110,6 +111,10 @@ def psf_photometry(
         Aperture radius for initial flux estimation in ``PSFPhotometry``.
     epsf_maxiters : int
         Maximum ePSF building iterations.
+    background : float or None
+        Background level to subtract.  If ``None`` (default), estimated
+        via ``sigma_clipped_stats``.  Pass the known value for crowded
+        fields where the median is biased.
 
     Returns
     -------
@@ -123,8 +128,9 @@ def psf_photometry(
     x, y = _as_xy(sources)
     n_sources = len(x)
 
-    # Estimate and subtract background
-    _, background, _ = sigma_clipped_stats(image)
+    # Subtract background
+    if background is None:
+        _, background, _ = sigma_clipped_stats(image)
     image_sub = image - background
 
     # Extract flux for star selection

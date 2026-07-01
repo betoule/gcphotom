@@ -41,6 +41,25 @@ psf_results, epsf_res = gcp.psf_photometry(
 print(f"ePSF: {epsf_res.iterations} iterations, converged={epsf_res.converged}")
 psf_cat = gcp.cross_match(psf_results, sim_cat)
 
+# 8. Aperture photometry with constant correction
+fwhm = gcp.gcmodel.gamma2fwhm(fitted["gamma"], fitted["alpha"])
+r_core_idx = np.argmin(np.abs(cog["radius"] - fwhm))
+r_corr_idx = np.argmin(np.abs(cog["radius"] - 3 * fwhm))
+r_core = cog["radius"][r_core_idx]
+r_corr = cog["radius"][r_corr_idx]
+ac = gcp.gcmodel.moffat_flux(
+    r_corr, fitted["gamma"], fitted["alpha"]
+) / gcp.gcmodel.moffat_flux(r_core, fitted["gamma"], fitted["alpha"])
+bkg = fitted["back"][fitter.kept]
+flux_ap = (cog["flux_clean"][:, r_core_idx][fitter.kept] - bkg * np.pi * r_core**2) * ac
+flux_ap_full = np.full(len(det_cat), np.nan)
+flux_ap_full[fitter.kept] = flux_ap
+kept_cat = input_cat[fitter.kept]
+print(
+    f"Aperture: r_core={r_core:.1f}px, r_corr={r_corr:.1f}px, "
+    f"FWHM={fwhm:.2f}px, AC={ac:.4f}"
+)
+
 
 poorly = (
     np.abs(fitted["flux"] / input_cat["flux"] - 1)
@@ -91,6 +110,17 @@ binplot(
     logbins=True,
     scale_err=True,
     label="PSF photometry",
+)
+binplot(
+    kept_cat["flux"],
+    ((flux_ap / kept_cat["flux"]) - 1) * 100,
+    data=False,
+    method="median",
+    color="m",
+    zorder=10,
+    logbins=True,
+    scale_err=True,
+    label="aperture + AC",
 )
 plt.xlabel("Simulated flux [ADU]")
 plt.ylabel("Reconstruction error [%]")
