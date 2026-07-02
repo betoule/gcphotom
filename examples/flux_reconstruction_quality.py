@@ -7,12 +7,14 @@ from photutils.detection import DAOStarFinder
 image, sim_cat = gcp.simulate_image(n_sources=1000, background=100, read_noise=5)
 
 # 2. Detect sources and build segmentation image (now takes care of background estimation)
-seg, det_cat = gcp.detect_and_segment(image, n_pixels=5)
+seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(image, n_pixels=5)
 # let's kill unrecognized blends
 bads = (det_cat.ellipticity * det_cat.area).value > 6
 
-# 3. Extract growth curves with contamination estimation (takes care of error estimation)
-cog = gcp.extract_growth_curves(image, det_cat, segmentation_image=seg)
+# 3. Extract growth curves with contamination estimation
+cog = gcp.extract_growth_curves(
+    image, det_cat, segmentation_image=seg, background_variance=bkg_var_map
+)
 
 # 4. Fit all growth curves
 fitter = gcp.Fitter(cog, bads=bads)

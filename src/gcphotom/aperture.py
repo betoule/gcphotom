@@ -210,11 +210,16 @@ def detect_and_segment(
     segmentation_image : `~photutils.segmentation.SegmentationImage`
     catalog : `~photutils.segmentation.SourceCatalog`
     background_map : 2D `~numpy.ndarray`
-        The background map that was subtracted. Full-resolution 2D array
-        even when a scalar was provided.
+        The background level map that was subtracted. Full-resolution 2D
+        array even when a scalar was provided.
+    background_variance_map : 2D `~numpy.ndarray`
+        The background variance map (RMS squared). Full-resolution 2D
+        array, reusable for downstream COG extraction.
     """
     if background is None:
-        background, _ = estimate_background(image, box_size=bkg_box_size)
+        background, bkg_var_map = estimate_background(image, box_size=bkg_box_size)
+    else:
+        _, bkg_var_map = estimate_background(image, box_size=bkg_box_size)
 
     if np.isscalar(background):
         background_map = np.full_like(image, background, dtype=float)
@@ -239,7 +244,7 @@ def detect_and_segment(
 
     catalog = SourceCatalog(subtracted, seg)
 
-    return seg, catalog, background_map
+    return seg, catalog, background_map, bkg_var_map
 
 
 # pylint: enable=too-many-arguments,too-many-positional-arguments

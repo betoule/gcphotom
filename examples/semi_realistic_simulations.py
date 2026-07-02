@@ -71,7 +71,7 @@ image = real_image + source_image
 # 3. Detect sources
 # ------------------------------------------------------------------
 
-seg, det_cat = gcp.detect_and_segment(image, n_pixels=5)
+seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(image, n_pixels=5)
 bads = (det_cat.ellipticity * det_cat.area).value > 6
 
 
@@ -81,7 +81,9 @@ bads = (det_cat.ellipticity * det_cat.area).value > 6
 # Must use the full det_cat so that segmentation labels align with
 # source indices. Filtering to injected sources happens afterwards.
 
-cog = gcp.extract_growth_curves(image, det_cat, segmentation_image=seg)
+cog = gcp.extract_growth_curves(
+    image, det_cat, segmentation_image=seg, background_variance=bkg_var_map
+)
 
 
 # ------------------------------------------------------------------

@@ -29,14 +29,16 @@ print(f"done in {time.time() - t0:.1f}s")
 # 2. Detect
 print("2. Detecting sources...", end=" ")
 t0 = time.time()
-seg, det_cat = gcp.detect_and_segment(image)
+seg, det_cat, _, bkg_var_map = gcp.detect_and_segment(image)
 n_det = len(det_cat)
 print(f"found {n_det} sources in {time.time() - t0:.1f}s")
 
 # 3. Extract growth curves
 print("3. Extracting growth curves...", end=" ")
 t0 = time.time()
-cog = gcp.extract_growth_curves(image, det_cat, segmentation_image=seg)
+cog = gcp.extract_growth_curves(
+    image, det_cat, segmentation_image=seg, background_variance=bkg_var_map
+)
 print(f"done in {time.time() - t0:.1f}s")
 
 # 4. Fit with different loss functions
