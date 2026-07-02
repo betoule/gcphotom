@@ -129,13 +129,13 @@ class TestDetectAndSegment:
     def test_detects_all_well_separated(self, controlled_catalog):
         positions = [(50, 50), (100, 50), (150, 50), (50, 150), (150, 150)]
         img = controlled_catalog(positions)
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         assert len(cat) == len(positions)
 
     def test_positions_close_to_truth(self, controlled_catalog):
         input_positions = np.array([(50, 50), (100, 100), (150, 150)])
         img = controlled_catalog(input_positions)
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         positions = np.column_stack([cat.x_centroid, cat.y_centroid])
         dists = np.sqrt(np.sum((positions - input_positions) ** 2, axis=1))
         assert np.all(dists < 1.0)
@@ -143,14 +143,14 @@ class TestDetectAndSegment:
     def test_detects_without_explicit_background(self, controlled_catalog):
         positions = [(50, 50), (100, 50), (150, 50)]
         img = controlled_catalog(positions)
-        seg, cat = detect_and_segment(img)
+        seg, cat, _ = detect_and_segment(img)
         assert len(cat) == len(positions)
 
 
 class TestExtractGrowthCurvesWithSegmentation:
     def test_returns_contamination_keys(self, controlled_catalog):
         img = controlled_catalog([(100, 100)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         sub = img - 100
         result = extract_growth_curves(
             sub,
@@ -163,7 +163,7 @@ class TestExtractGrowthCurvesWithSegmentation:
     def test_without_segmentation_clean_equals_total(self, controlled_catalog):
         img = controlled_catalog([(100, 100)])
         sub = img - 100
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         result = extract_growth_curves(
             sub, np.column_stack([cat.x_centroid, cat.y_centroid])
         )
@@ -174,7 +174,7 @@ class TestExtractGrowthCurvesWithSegmentation:
 
     def test_isolated_source_low_contamination(self, controlled_catalog):
         img = controlled_catalog([(128, 128)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         sub = img - 100
         result = extract_growth_curves(
             sub,
@@ -187,7 +187,7 @@ class TestExtractGrowthCurvesWithSegmentation:
 
     def test_overlapping_pair_has_contamination(self, controlled_catalog):
         img = controlled_catalog([(100, 100), (110, 110)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         sub = img - 100
         radii = np.arange(3, 20, 1)
         result = extract_growth_curves(
@@ -201,7 +201,7 @@ class TestExtractGrowthCurvesWithSegmentation:
 
     def test_end_to_end_simulated(self, controlled_catalog):
         img = controlled_catalog([(60, 60), (128, 128), (196, 60)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         sub = img - 100
         result = extract_growth_curves(
             sub,
@@ -239,7 +239,7 @@ class TestCrossMatch:
 class TestExtractGrowthCurvesCatalogInput:
     def test_extract_accepts_table(self, controlled_catalog):
         img = controlled_catalog([(60, 60), (120, 120)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         # build a Table from the catalog
         tab = Table({"x": cat.x_centroid, "y": cat.y_centroid})
         result = extract_growth_curves(img, tab, segmentation_image=seg)
@@ -247,20 +247,20 @@ class TestExtractGrowthCurvesCatalogInput:
 
     def test_extract_accepts_source_catalog(self, controlled_catalog):
         img = controlled_catalog([(70, 70)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         result = extract_growth_curves(img, cat, segmentation_image=seg)
         assert result["flux"].shape[0] == 1
 
     def test_auto_background_variance(self, controlled_catalog):
         img = controlled_catalog([(80, 80)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         # do not pass background_variance -> auto inside
         result = extract_growth_curves(img, cat, segmentation_image=seg)
         assert np.all(result["background_var"] >= 0)
 
     def test_extract_accepts_positions_list(self, controlled_catalog):
         img = controlled_catalog([(55, 55)])
-        seg, cat = detect_and_segment(img, background=100)
+        seg, cat, _ = detect_and_segment(img, background=100)
         poss = [[float(cat.x_centroid[0]), float(cat.y_centroid[0])]]
         result = extract_growth_curves(img, poss, segmentation_image=seg)
         assert result["flux"].shape[0] == 1
@@ -284,7 +284,31 @@ class TestExtractGrowthCurvesCatalogInput:
     def test_deblend_splits_close_pair(self, controlled_catalog):
         # two sources ~6 px apart form a single blob without deblending
         img = controlled_catalog([(60, 60), (66, 60)], flux=1e5)
-        seg_no, cat_no = detect_and_segment(img, background=100, deblend=False)
+        seg_no, cat_no, _ = detect_and_segment(img, background=100, deblend=False)
         assert len(cat_no) == 1
-        seg_yes, cat_yes = detect_and_segment(img, background=100, deblend=True)
+        seg_yes, cat_yes, _ = detect_and_segment(img, background=100, deblend=True)
         assert len(cat_yes) == 2
+
+    def test_returns_2d_background_map(self, controlled_catalog):
+        img = controlled_catalog([(100, 100)])
+        _, _, bkg_map = detect_and_segment(img, background=100)
+        assert bkg_map.shape == img.shape
+        np.testing.assert_allclose(bkg_map, 100, atol=0.01)
+
+    def test_2d_background_auto_estimate(self, controlled_catalog):
+        img = controlled_catalog([(100, 100)])
+        _, _, bkg_map = detect_and_segment(img)
+        assert bkg_map.shape == img.shape
+        np.testing.assert_allclose(bkg_map.mean(), 100, atol=5)
+
+    def test_extract_with_2d_variance(self, controlled_catalog):
+        img = controlled_catalog([(100, 100)])
+        seg, cat, _ = detect_and_segment(img, background=100)
+        bkg_var = np.full_like(img, 25.0)
+        result = extract_growth_curves(
+            img - 100,
+            np.column_stack([cat.x_centroid, cat.y_centroid]),
+            background_variance=bkg_var,
+        )
+        assert result["background_var"].shape[0] == len(cat)
+        assert np.all(result["background_var"] > 0)

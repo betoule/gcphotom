@@ -4,6 +4,7 @@
 
 # Features
 
+- **2D background estimation** via mesh-based sigma-clipped statistics — handles spatially varying background in large CCD images.
 - **Growth curve fitting** using the analytical Moffat PSF model for accurate total flux, and local background estimation.
 - **Aperture contamination estimation** via segmentation-based source detection — identifies flux from neighboring sources in each aperture.
 - **Differentiable implementation** powered by JAX — ideal for gradient-based optimization, or integration into larger differentiable pipelines.
@@ -35,10 +36,10 @@ import matplotlib.pyplot as plt
 # 1. Simulate a realistic astronomical image
 image, sim_cat = gcp.simulate_image(n_sources=100, background=100, read_noise=5)
 
-# 2. Detect sources and build segmentation image (now takes care of background estimation)
-seg, det_cat = gcp.detect_and_segment(image)
+# 2. Detect sources and build segmentation image (estimates 2D background)
+seg, det_cat, bkg_map = gcp.detect_and_segment(image)
 
-# 3. Extract growth curves with contamination estimation (takes care of error estimation)
+# 3. Extract growth curves with contamination estimation
 cog = gcp.extract_growth_curves(
     image,
     det_cat,
@@ -58,7 +59,13 @@ print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
 plt.errorbar(input_cat['flux'], fitted['flux'] / input_cat['flux'], fitted['std_errors']['flux']/input_cat['flux'], marker='o', ls='None')
 ```
 
-The `segmentation_image` enables contamination estimation by masking out neighboring sources. The result always includes `flux_clean` and `contamination`. When no segmentation is provided, `flux_clean` equals `flux` and `contamination` is zero. Cross-matching detected and simulated catalogs returns a matched table of the same length as the detected catalog (NaNs for unmatched). `Fitter.results` always returns per-source arrays aligned to the original input length (NaNs for internally dropped sources).
+The `detect_and_segment` function now returns a 2D background map as its third return value, usable for downstream processing. The `segmentation_image` enables contamination estimation by masking out neighboring sources. The result always includes `flux_clean` and `contamination`. When no segmentation is provided, `flux_clean` equals `flux` and `contamination` is zero. Cross-matching detected and simulated catalogs returns a matched table of the same length as the detected catalog (NaNs for unmatched). `Fitter.results` always returns per-source arrays aligned to the original input length (NaNs for internally dropped sources).
+
+For images with a varying background, you can estimate 2D background and variance maps independently:
+
+```python
+bkg, bkg_var = gcp.estimate_background(image, box_size=(100, 100))
+```
 
 # CLI
 

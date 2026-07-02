@@ -8,7 +8,7 @@ from gcphotom.psf_photometry import _as_xy, psf_photometry
 class TestAsXY:
     def test_source_catalog(self):
         image, _ = gcp.simulate_image(n_sources=10, seed=42)
-        _, cat = gcp.detect_and_segment(image, n_pixels=5)
+        _, cat, _ = gcp.detect_and_segment(image, n_pixels=5)
         x, y = _as_xy(cat)
         assert len(x) > 0
         assert np.allclose(x, cat.x_centroid)
@@ -33,7 +33,7 @@ class TestPSFPhotometry:
     @pytest.fixture
     def image_and_sources(self):
         image, sim_cat = gcp.simulate_image(n_sources=100, seed=42)
-        seg, det_cat = gcp.detect_and_segment(image, n_pixels=5)
+        seg, det_cat, _ = gcp.detect_and_segment(image, n_pixels=5)
         return image, sim_cat, det_cat
 
     def test_returns_results_and_epsf(self, image_and_sources):
@@ -58,6 +58,6 @@ class TestPSFPhotometry:
 
     def test_too_few_isolated_stars(self):
         image, _ = gcp.simulate_image(n_sources=2, seed=42)
-        _, det_cat = gcp.detect_and_segment(image, n_pixels=5)
+        _, det_cat, _ = gcp.detect_and_segment(image, n_pixels=5)
         with pytest.raises(ValueError, match="isolated"):
             psf_photometry(image, det_cat, nstars=10)

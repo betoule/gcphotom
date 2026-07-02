@@ -1,5 +1,4 @@
 import numpy as np
-from astropy.stats import sigma_clipped_stats
 from photutils.profiles import CurveOfGrowth
 from photutils.segmentation import (
     detect_sources,
@@ -8,6 +7,7 @@ from photutils.segmentation import (
     SourceCatalog,
 )
 
+from .background import estimate_background
 from .match import cross_match as _cross_match  # re-export for backward compat
 
 
@@ -94,12 +94,14 @@ def extract_growth_curves(
     radii : 1D `~numpy.ndarray` or None
         Aperture radii in pixels. Defaults to 10 logarithmically spaced
         values between 3 and 30 pixels.
-    background_variance : 2D `~numpy.ndarray` or None
-        Per-pixel background variance map. If ``None`` (default), the
-        variance is estimated as ``std**2`` via sigma-clipped statistics
-        on the image. This variance captures background photon noise,
-        read-out noise, and any other spatially stationary noise source.
-        Object photon noise is handled separately during fitting.
+    background_variance : float, 2D `~numpy.ndarray` or None
+        Per-pixel background variance map. If a scalar, a uniform
+        variance is assumed. If ``None`` (default), a 2D variance map
+        is estimated via mesh-based sigma-clipped statistics using
+        :func:`estimate_background`. This variance captures background
+        photon noise, read-out noise, and any other spatially stationary
+        noise source. Object photon noise is handled separately during
+        fitting.
     segmentation_image : `~photutils.segmentation.SegmentationImage` or None
         Segmentation map from :func:`detect_and_segment`. If provided,
         contamination from neighboring sources is estimated.
@@ -133,10 +135,11 @@ def extract_growth_curves(
     contamination = np.zeros((n_sources, n_radii))
 
     if background_variance is None:
-        _, _, std = sigma_clipped_stats(image)
-        background_variance = np.full_like(image, std**2)
+        _, bkg_var = estimate_background(image)
+        background_variance = bkg_var
+    elif np.isscalar(background_variance):
+        background_variance = np.full_like(image, background_variance, dtype=float)
 
-    # Convert variance to 1-sigma for photutils CurveOfGrowth
     error = np.sqrt(background_variance)
 
     if segmentation_image is not None:
@@ -171,16 +174,26 @@ def extract_growth_curves(
 # pylint: enable=too-many-arguments,too-many-positional-arguments
 
 
-def detect_and_segment(image, background=None, n_sigma=3.0, n_pixels=10, deblend=True):
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+def detect_and_segment(
+    image,
+    background=None,
+    n_sigma=3.0,
+    n_pixels=10,
+    deblend=True,
+    bkg_box_size=(50, 50),
+):
     """Detect sources and produce a segmentation image.
 
     Parameters
     ----------
     image : 2D `~numpy.ndarray`
         Image data with background included.
-    background : float or None
-        Background level to subtract. If ``None`` (default), estimated
-        via :func:`astropy.stats.sigma_clipped_stats`.
+    background : float, 2D `~numpy.ndarray`, or None
+        Background level to subtract. If a scalar, a uniform background
+        is subtracted. If a 2D array, it is subtracted pixel-wise.
+        If ``None`` (default), a 2D background map is estimated via
+        :func:`estimate_background`.
     n_sigma : float
         Detection significance threshold (passed to ``detect_threshold``).
     n_pixels : int
@@ -188,16 +201,30 @@ def detect_and_segment(image, background=None, n_sigma=3.0, n_pixels=10, deblend
     deblend : bool
         If ``True`` (default), run ``deblend_sources`` to separate overlapping
         sources using photutils' deblender.
+    bkg_box_size : tuple of int, optional
+        Box size for 2D background estimation. Used only when
+        ``background`` is ``None``. Default ``(50, 50)``.
 
     Returns
     -------
-    segmentation_image: `~photutils.segmentation.SegmentationImage`.
-    catalog: `~photutils.segmentation.SourceCatalog`.
+    segmentation_image : `~photutils.segmentation.SegmentationImage`
+    catalog : `~photutils.segmentation.SourceCatalog`
+    background_map : 2D `~numpy.ndarray`
+        The background map that was subtracted. Full-resolution 2D array
+        even when a scalar was provided.
     """
     if background is None:
-        _, background, _ = sigma_clipped_stats(image)
-    subtracted = image - background
-    threshold = detect_threshold(image, n_sigma=n_sigma, background=background)
+        background, _ = estimate_background(image, box_size=bkg_box_size)
+
+    if np.isscalar(background):
+        background_map = np.full_like(image, background, dtype=float)
+        scalar_bkg = background
+    else:
+        background_map = np.asarray(background, dtype=float)
+        scalar_bkg = float(np.nanmedian(background_map))
+
+    subtracted = image - background_map
+    threshold = detect_threshold(image, n_sigma=n_sigma, background=scalar_bkg)
     seg = detect_sources(subtracted, threshold, n_pixels=n_pixels)
 
     if deblend:
@@ -212,7 +239,10 @@ def detect_and_segment(image, background=None, n_sigma=3.0, n_pixels=10, deblend
 
     catalog = SourceCatalog(subtracted, seg)
 
-    return seg, catalog
+    return seg, catalog, background_map
+
+
+# pylint: enable=too-many-arguments,too-many-positional-arguments
 
 
 def cross_match(input_positions, detected_positions, tolerance=5.0):

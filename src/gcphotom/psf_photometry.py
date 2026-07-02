@@ -3,9 +3,10 @@
 import numpy as np
 
 from astropy.nddata import NDData
-from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
 from photutils.psf import EPSFBuilder, PSFPhotometry, SourceGrouper, extract_stars
+
+from .background import estimate_background
 
 
 def _as_xy(sources):
@@ -111,10 +112,11 @@ def psf_photometry(
         Aperture radius for initial flux estimation in ``PSFPhotometry``.
     epsf_maxiters : int
         Maximum ePSF building iterations.
-    background : float or None
-        Background level to subtract.  If ``None`` (default), estimated
-        via ``sigma_clipped_stats``.  Pass the known value for crowded
-        fields where the median is biased.
+    background : float, 2D ndarray or None
+        Background level to subtract.  If a scalar, a uniform background
+        is subtracted.  If a 2D array, it is subtracted pixel-wise.
+        If ``None`` (default), a 2D background map is estimated and its
+        median is used for thresholding.
 
     Returns
     -------
@@ -130,8 +132,11 @@ def psf_photometry(
 
     # Subtract background
     if background is None:
-        _, background, _ = sigma_clipped_stats(image)
-    image_sub = image - background
+        background, _ = estimate_background(image)
+    if np.isscalar(background):
+        image_sub = image - background
+    else:
+        image_sub = image - np.asarray(background, dtype=float)
 
     # Extract flux for star selection
     if hasattr(sources, "segment_flux"):

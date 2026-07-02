@@ -2,6 +2,7 @@
 
 __version__ = "0.1.0"
 
+from gcphotom.background import estimate_background
 from gcphotom.aperture import (
     cross_match,
     detect_and_segment,
@@ -20,6 +21,7 @@ from . import match  # public submodule
 
 __all__ = [
     "cross_match",
+    "estimate_background",
     "detect_and_segment",
     "extract_growth_curves",
     "Fitter",
