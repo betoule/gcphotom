@@ -33,7 +33,7 @@ def small_sim_fitted(small_sim_gc):
     """Fit once per module; all read-only tests share this fitter."""
     _, _, gc = small_sim_gc
     f = gcp.Fitter(gc)
-    bf, extra = f.fit(show_progress=False, niter=300)
+    bf, extra = f.fit(show_progress=False, niter=300, compute_uncertainty=True)
     result = f.results(bf)
     return f, bf, extra, result
 
@@ -332,7 +332,7 @@ class TestUncertainty:
         f = gcp.Fitter(gc)
         bf, _ = f.fit(show_progress=False, niter=100)
         f.detect_contamination(bf)
-        bf2, _ = f.fit(show_progress=False, niter=100)
+        bf2, _ = f.fit(show_progress=False, niter=100, compute_uncertainty=True)
         result = f.results(bf2)
         assert "std_errors" in result
         assert np.all(np.isfinite(np.asarray(result["std_errors"]["gamma"])))

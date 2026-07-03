@@ -110,7 +110,7 @@ bads_injected = bads[injected_mask]
 fitter = gcp.Fitter(cog, bads=bads_injected)
 best_fit, extra = fitter.fit(learning_rate=1e-2, niter=2000)
 fitter.detect_contamination(best_fit)
-best_fit, extra = fitter.fit(learning_rate=1e-2, niter=2000)
+best_fit, extra = fitter.fit(learning_rate=1e-2, niter=2000, compute_uncertainty=True)
 best_fit_no_back, extra_no_back = fitter.fit(
     learning_rate=1e-2,
     niter=2000,

@@ -200,7 +200,7 @@ class Fitter:
         desc=None,
         loss=None,
         fix=None,
-        compute_uncertainty=True,
+        compute_uncertainty=False,
     ):
         """Fit using Adam optimizer with a robust M-estimator loss.
 
@@ -232,11 +232,11 @@ class Fitter:
                 fit(loss=lambda x: jnp.abs(x))       — L1 loss
 
         compute_uncertainty : bool
-            If ``True`` (default), compute parameter covariance and standard
+            If ``True``, compute parameter covariance and standard
             errors via the Jacobian of weighted residuals (adds ~1.5 s to
-            the fit).  Set to ``False`` when only best-fit values are needed.
-            When ``False``, ``extra`` will contain ``None`` for both
-            ``covariance`` and ``std_errors``.
+            the fit).  ``False`` by default — set to ``True`` when
+            uncertainties are needed.  When ``False``, ``extra`` will
+            contain ``None`` for both ``covariance`` and ``std_errors``.
 
         Returns
         -------

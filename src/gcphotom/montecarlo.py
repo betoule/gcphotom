@@ -90,11 +90,12 @@ def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> 
     fitter = gcp.Fitter(cog, bads=bads)
     best_fit, _ = fitter.fit(**cfg.fit_kwargs, desc="Fit (1)")
     fitter.detect_contamination(best_fit)
-    best_fit, _ = fitter.fit(**cfg.fit_kwargs, desc="Fit (2)")
+    best_fit, _ = fitter.fit(**cfg.fit_kwargs, compute_uncertainty=True, desc="Fit (2)")
 
     best_fit_no_back, _ = fitter.fit(
         **cfg.fit_kwargs,
         fix={"back": np.full(len(best_fit["back"]), np.mean(best_fit["back"]))},
+        compute_uncertainty=True,
         desc="Fit (fix back)",
     )
 

@@ -49,7 +49,7 @@ cog = gcp.extract_growth_curves(
 
 # 4. Fit all growth curves
 fitter = gcp.Fitter(cog)
-best_fit, extra = fitter.fit()
+best_fit, extra = fitter.fit(compute_uncertainty=True)
 fitted = fitter.results(best_fit)
 
 # 5. Match (return the matched reordered version of the sim_cat)
