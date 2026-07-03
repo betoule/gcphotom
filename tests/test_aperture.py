@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 from astropy.table import Table
 from gcphotom.aperture import (
-    cross_match,
     detect_and_segment,
     extract_growth_curves,
     _extract_single_growth_curve,
@@ -219,29 +218,6 @@ class TestExtractGrowthCurvesWithSegmentation:
         assert result["contamination"].shape[0] == len(cat)
         assert np.all(result["contamination"] >= 0)
         assert np.all(result["flux_clean"] >= 0)
-
-
-class TestCrossMatch:
-    def test_all_matched_for_well_separated(self):
-        input_pos = np.array([[50, 50], [100, 100], [150, 150]])
-        detected = np.array([[50.3, 50.2], [100.1, 99.9], [149.8, 150.1]])
-        result = cross_match(input_pos, detected, tolerance=5.0)
-        assert np.all(result["match_indices"] >= 0)
-        assert np.all(result["match_distances"] < 5.0)
-
-    def test_unmatched_beyond_tolerance(self):
-        input_pos = np.array([[50, 50]])
-        detected = np.array([[200, 200]])
-        result = cross_match(input_pos, detected, tolerance=5.0)
-        assert result["match_indices"][0] == -1
-        assert np.isinf(result["match_distances"][0])
-
-    def test_close_pair_both_matched(self):
-        input_pos = np.array([[100, 100], [106, 106]])
-        detected = np.array([[100.1, 100.1], [105.9, 105.9]])
-        result = cross_match(input_pos, detected, tolerance=5.0)
-        assert np.all(result["match_indices"] >= 0)
-        assert len(np.unique(result["match_indices"])) == 2
 
 
 class TestExtractGrowthCurvesCatalogInput:

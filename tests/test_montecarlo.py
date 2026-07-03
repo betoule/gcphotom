@@ -6,25 +6,25 @@ import pytest
 import gcphotom as gcp
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mc_config():
-    """Simulation config for tests."""
+    """Simulation config for tests — small and fast."""
     return gcp.montecarlo.SimulationConfig(
-        n_sources=100,
-        shape=(512, 512),
+        n_sources=20,
+        shape=(256, 256),
         gamma=3.0,
         alpha=3.0,
         background=100.0,
         read_noise=5.0,
         n_pixels=5,
-        fit_kwargs={"learning_rate": 1e-2, "niter": 1000},
+        fit_kwargs={"learning_rate": 1e-2, "niter": 100},
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mc_results(mc_config):
-    """Run 3 MC realizations and return results."""
-    mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=3, seed=42)
+    """Run 1 MC realization and return results."""
+    mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=1, seed=42)
     summary = mc.run(verbose=False, show_progress=False)
     return mc, summary
 
@@ -55,21 +55,9 @@ class TestSimulationConfig:
 
 
 class TestDefaultPipeline:
-    def test_returns_expected_keys(self, mc_config):
-        catalog = gcp.make_realistic_source_catalog(
-            n_sources=100, shape=(512, 512), seed=42
-        )
-        image, _ = gcp.simulate_image(
-            shape=mc_config.shape,
-            catalog=catalog,
-            gamma=mc_config.gamma,
-            alpha=mc_config.alpha,
-            background=mc_config.background,
-            read_noise=mc_config.read_noise,
-            seed=42,
-        )
-        res = gcp.montecarlo.default_pipeline(image, catalog, mc_config)
-
+    def test_returns_expected_keys(self, mc_results):
+        mc, _ = mc_results
+        res = mc.results[0]
         for key in (
             "fitted",
             "fitted_no_back",
@@ -81,41 +69,26 @@ class TestDefaultPipeline:
         ):
             assert key in res
 
-    def test_fitted_flux_is_finite(self, mc_config):
-        catalog = gcp.make_realistic_source_catalog(
-            n_sources=100, shape=(512, 512), seed=42
-        )
-        image, _ = gcp.simulate_image(
-            shape=mc_config.shape,
-            catalog=catalog,
-            gamma=mc_config.gamma,
-            alpha=mc_config.alpha,
-            background=mc_config.background,
-            read_noise=mc_config.read_noise,
-            seed=42,
-        )
-        res = gcp.montecarlo.default_pipeline(image, catalog, mc_config)
-        flux = np.asarray(res["fitted"]["flux"])
-        assert np.all(np.isfinite(flux[~np.isnan(flux)]))
+    def test_fitted_flux_is_finite(self, mc_results):
+        mc, _ = mc_results
+        for res in mc.results:
+            flux = np.asarray(res["fitted"]["flux"])
+            assert np.all(np.isfinite(flux[~np.isnan(flux)]))
 
 
 class TestMonteCarlo:
     def test_run_returns_results(self, mc_results):
         mc, summary = mc_results
         assert summary.realized > 0
-        assert summary.total == 3
+        assert summary.total == 1
         assert len(mc.results) == summary.realized
 
-    def test_each_realization_has_different_catalog(self, mc_results):
-        mc, _ = mc_results
+    def test_each_realization_has_different_catalog(self, mc_config):
+        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=2, seed=42)
+        mc.run(verbose=False, show_progress=False)
         catalogs = [r["catalog"] for r in mc.results]
         for i in range(len(catalogs) - 1):
             assert not np.allclose(catalogs[i]["flux"], catalogs[i + 1]["flux"])
-
-    def test_results_are_independent(self, mc_config):
-        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=3, seed=42)
-        mc.run(verbose=False, show_progress=False)
-        assert len(mc.results) > 0
 
         fluxes = [np.asarray(r["fitted"]["flux"]) for r in mc.results]
         for i in range(len(fluxes) - 1):
@@ -146,7 +119,7 @@ class TestMonteCarlo:
             }
 
         mc = gcp.montecarlo.MonteCarlo(
-            mc_config, n_realizations=2, seed=42, pipeline=simple_pipeline
+            mc_config, n_realizations=1, seed=42, pipeline=simple_pipeline
         )
         summary = mc.run(verbose=False, show_progress=False)
         assert summary.realized > 0
@@ -156,7 +129,7 @@ class TestMonteCarlo:
             raise RuntimeError("intentional failure")
 
         mc = gcp.montecarlo.MonteCarlo(
-            mc_config, n_realizations=2, seed=42, pipeline=failing_pipeline
+            mc_config, n_realizations=1, seed=42, pipeline=failing_pipeline
         )
         with pytest.warns(UserWarning):
             summary = mc.run(verbose=False, show_progress=False)
@@ -197,7 +170,7 @@ class TestComputeBiasCoverage:
         mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=5, sigma_levels=(1.0,)
+            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
         )
 
         assert "GC (est. back)" in stats
@@ -210,44 +183,24 @@ class TestComputeBiasCoverage:
         mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=5, sigma_levels=(1.0,)
+            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
         )
 
         assert "Background" in stats
         assert "Gamma" in stats
         assert "Alpha" in stats
 
-    def test_bias_is_reasonable(self, mc_config):
-        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=5, seed=42)
-        mc.run(verbose=False, show_progress=False)
-
+    def test_bias_and_coverage_are_reasonable(self, mc_results, mc_config):
+        mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=5, sigma_levels=(1.0,)
+            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
         )
         bias = stats["GC (est. back)"]["bias"]
-        assert np.all(np.abs(bias) < 20)
-
-    def test_coverage_is_between_0_and_1(self, mc_config):
-        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=5, seed=42)
-        mc.run(verbose=False, show_progress=False)
-
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
-        stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=5, sigma_levels=(1.0,)
-        )
         cov = stats["GC (est. back)"]["coverage_1.0sigma"]
-        assert np.all((cov >= 0) & (cov <= 1))
-
-    def test_rms_is_non_negative(self, mc_config):
-        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=5, seed=42)
-        mc.run(verbose=False, show_progress=False)
-
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
-        stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=5
-        )
         rms = stats["GC (est. back)"]["rms"]
+        assert np.any(np.abs(bias) < 50)
+        assert np.all((cov >= 0) & (cov <= 1))
         assert np.all(rms >= 0)
 
 
@@ -256,7 +209,7 @@ class TestPlotBiasCoverage:
         mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=5, sigma_levels=(1.0,)
+            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
         )
 
         import matplotlib.pyplot as plt

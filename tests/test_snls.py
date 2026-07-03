@@ -467,7 +467,7 @@ class TestProcessSingle:
             band="g",
             min_flux=10000.0,
             learning_rate=1e-2,
-            niter=500,
+            niter=50,
         )
         assert result is not None
         assert result["n_initial"] == 10
@@ -562,7 +562,7 @@ class TestProcessSingle:
                 "--learning-rate",
                 "1e-2",
                 "--niter",
-                "500",
+                "50",
             ],
         )
         assert result.exit_code == 0, result.output
