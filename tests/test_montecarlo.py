@@ -166,11 +166,11 @@ class TestCollectData:
 
 
 class TestComputeBiasCoverage:
-    def test_default_estimators(self, mc_results, mc_config):
+    def test_flux_estimators(self, mc_results, mc_config):
         mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
+            mc.results, estimators=estimators["flux"], nbins=3, sigma_levels=(1.0,)
         )
 
         assert "GC (est. back)" in stats
@@ -179,22 +179,26 @@ class TestComputeBiasCoverage:
         for key in ("xbins", "bias", "bias_err", "rms", "coverage_1.0sigma"):
             assert key in s
 
-    def test_nuisance_parameters(self, mc_results, mc_config):
+    def test_background_estimator(self, mc_results, mc_config):
         mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
+            mc.results,
+            estimators=estimators["background"],
+            nbins=3,
+            sigma_levels=(1.0,),
         )
 
         assert "Background" in stats
-        assert "Gamma" in stats
-        assert "Alpha" in stats
+        s = stats["Background"]
+        for key in ("xbins", "bias", "bias_err", "rms", "coverage_1.0sigma"):
+            assert key in s
 
     def test_bias_and_coverage_are_reasonable(self, mc_results, mc_config):
         mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
+            mc.results, estimators=estimators["flux"], nbins=3, sigma_levels=(1.0,)
         )
         bias = stats["GC (est. back)"]["bias"]
         cov = stats["GC (est. back)"]["coverage_1.0sigma"]
@@ -209,7 +213,7 @@ class TestPlotBiasCoverage:
         mc, _ = mc_results
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators, nbins=3, sigma_levels=(1.0,)
+            mc.results, estimators=estimators["flux"], nbins=3, sigma_levels=(1.0,)
         )
 
         import matplotlib.pyplot as plt
@@ -220,4 +224,60 @@ class TestPlotBiasCoverage:
 
         fig = ax_bias.get_figure()
         fig.savefig(str(tmp_path / "test_plot.png"))
+        plt.close(fig)
+
+
+class TestNuisanceStats:
+    def test_compute_nuisance_stats(self, mc_results, mc_config):
+        mc, _ = mc_results
+        estimators = gcp.montecarlo.build_default_estimators(mc_config)
+        nstats = gcp.montecarlo.compute_nuisance_stats(
+            mc.results, estimators=estimators["nuisance"]
+        )
+
+        assert "Gamma" in nstats
+        assert "Alpha" in nstats
+        for label in ("Gamma", "Alpha"):
+            s = nstats[label]
+            for key in (
+                "truth",
+                "estimates",
+                "bias",
+                "mean_bias",
+                "std_bias",
+                "rms_bias",
+            ):
+                assert key in s
+            assert np.isfinite(s["mean_bias"])
+
+    def test_plot_nuisance_summary(self, mc_results, mc_config, tmp_path):
+        mc, _ = mc_results
+        estimators = gcp.montecarlo.build_default_estimators(mc_config)
+        nstats = gcp.montecarlo.compute_nuisance_stats(
+            mc.results, estimators=estimators["nuisance"]
+        )
+
+        import matplotlib.pyplot as plt
+
+        fig = gcp.montecarlo.plot_nuisance_summary(nstats)
+        assert fig is not None
+        fig.savefig(str(tmp_path / "test_nuisance_plot.png"))
+        plt.close(fig)
+
+    def test_plot_background_bias(self, mc_results, mc_config, tmp_path):
+        mc, _ = mc_results
+        estimators = gcp.montecarlo.build_default_estimators(mc_config)
+        bg_stats = gcp.montecarlo.compute_bias_coverage(
+            mc.results,
+            estimators=estimators["background"],
+            nbins=3,
+            sigma_levels=(1.0,),
+        )
+
+        import matplotlib.pyplot as plt
+
+        ax = gcp.montecarlo.plot_background_bias(bg_stats)
+        assert ax is not None
+        fig = ax.get_figure()
+        fig.savefig(str(tmp_path / "test_background_plot.png"))
         plt.close(fig)

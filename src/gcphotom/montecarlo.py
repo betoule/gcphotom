@@ -1,7 +1,19 @@
-"""Monte Carlo framework for flux estimator bias and coverage analysis.
+"""Monte Carlo framework for photometry bias and coverage analysis.
 
 Provides tools to run multiple realizations of a photometry pipeline and
 compute bias and coverage statistics for fitted parameters.
+
+Parameter types
+---------------
+The framework distinguishes three kinds of parameters:
+
+- **Flux** — per-source flux estimates, studied as bias vs true flux
+  (:func:`compute_bias_coverage`, :func:`plot_bias_coverage`).
+- **Background** — per-source background estimates, also vs flux
+  (:func:`compute_bias_coverage`, :func:`plot_background_bias`).
+- **Nuisance** — global scalar parameters (gamma, alpha) fitted once
+  per realization (:func:`compute_nuisance_stats`,
+  :func:`plot_nuisance_summary`).
 """
 
 from __future__ import annotations
@@ -362,58 +374,83 @@ def _build_nuisance_spec(
     std_key: str | None,
     bias_scale: float = 100.0,
 ) -> dict:
-    """Build estimator spec for a global nuisance parameter.
+    """Build spec for a scalar nuisance parameter (gamma, alpha).
 
-    The scalar truth value is repeated for each source so the framework
-    can bin by true flux.
+    The parameter is fitted as a single scalar per realization. The spec
+    is designed for use with :func:`compute_nuisance_stats`.
+    """
+
+    def get_estimate(r: dict) -> np.ndarray:
+        return np.asarray(r["fitted"][param])
+
+    return {
+        "truth": truth_value,
+        "get_estimate": get_estimate,
+        "std_key": std_key,
+        "bias_scale": bias_scale,
+    }
+
+
+def _build_background_spec(cfg: SimulationConfig) -> dict:
+    """Build estimator spec for per-source background estimates.
+
+    Unlike global nuisance parameters, the fitted background is
+    per-source and can be studied as a function of flux.
     """
 
     def get_x(r: dict) -> np.ndarray:
         return np.asarray(r["input_cat"]["flux"])
 
     def get_truth(r: dict) -> np.ndarray:
-        return np.full(len(r["input_cat"]), truth_value)
+        return np.full(len(r["input_cat"]), cfg.background)
 
     def get_estimate(r: dict) -> np.ndarray:
-        return np.full(len(r["input_cat"]), np.asarray(r["fitted"][param]))
+        return np.asarray(r["fitted"]["back"])
 
-    if std_key is not None:
-
-        def get_std(r: dict) -> np.ndarray:
-            se = r["fitted"].get("std_errors", {})
-            try:
-                val = np.asarray(se[std_key])
-            except (KeyError, TypeError):
-                val = np.nan
-            return np.full(len(r["input_cat"]), val)
-
-    else:
-        get_std = None
+    def get_std(r: dict) -> np.ndarray | None:
+        se = r["fitted"].get("std_errors", {})
+        try:
+            return np.asarray(se["back"])
+        except (KeyError, TypeError):
+            return np.full(len(r["input_cat"]), np.nan)
 
     return _build_estimator_spec(
         get_x=get_x,
         get_truth=get_truth,
         get_estimate=get_estimate,
         get_std=get_std,
-        bias_scale=bias_scale,
+        bias_scale=100.0,
     )
 
 
 def build_default_estimators(cfg: SimulationConfig) -> dict[str, dict]:
-    """Build the full default estimator specification dict.
+    """Build all default estimators, grouped by parameter type.
 
-    Includes flux estimators and nuisance parameters (background, gamma,
-    alpha).
+    Returns a dict with three keys, each containing estimator specs
+    suitable for the corresponding compute/plot functions:
+
+    **flux** — per-source flux bias and coverage vs simulated flux.
+    Use with :func:`compute_bias_coverage` and :func:`plot_bias_coverage`.
+
+    **background** — per-source background bias vs simulated flux.
+    Use with :func:`compute_bias_coverage` and :func:`plot_background_bias`.
+
+    **nuisance** — global scalar parameters (gamma, alpha) fitted once
+    per realization. Use with :func:`compute_nuisance_stats` and
+    :func:`plot_nuisance_summary`.
     """
-    estimators = _default_flux_estimators()
-    estimators["Background"] = _build_nuisance_spec("back", cfg.background, "back")
-    estimators["Gamma"] = _build_nuisance_spec(
-        "gamma", cfg.gamma, "gamma", bias_scale=100.0
-    )
-    estimators["Alpha"] = _build_nuisance_spec(
-        "alpha", cfg.alpha, "alpha", bias_scale=100.0
-    )
-    return estimators
+    return {
+        "flux": _default_flux_estimators(),
+        "background": {"Background": _build_background_spec(cfg)},
+        "nuisance": {
+            "Gamma": _build_nuisance_spec(
+                "gamma", cfg.gamma, "gamma", bias_scale=100.0
+            ),
+            "Alpha": _build_nuisance_spec(
+                "alpha", cfg.alpha, "alpha", bias_scale=100.0
+            ),
+        },
+    }
 
 
 def compute_bias_coverage(
@@ -534,7 +571,10 @@ def plot_bias_coverage(
     expected_coverage: float | None = None,
     figsize: tuple = (12, 8),
 ) -> tuple[plt.Axes, plt.Axes]:
-    """Plot bias (with RMS shaded region) and coverage vs. simulated flux.
+    """Plot flux bias (with RMS shaded region) and coverage vs simulated flux.
+
+    Designed for per-source flux estimators. For nuisance parameters
+    (gamma, alpha) use :func:`plot_nuisance_summary` instead.
 
     Parameters
     ----------
@@ -627,3 +667,179 @@ def plot_bias_coverage(
     ax_coverage.legend(loc="best", frameon=False)
 
     return ax_bias, ax_coverage
+
+
+def compute_nuisance_stats(
+    results: list[dict],
+    *,
+    estimators: dict[str, dict] | None = None,
+) -> dict[str, dict]:
+    """Compute bias statistics for scalar nuisance parameters across realizations.
+
+    Parameters
+    ----------
+    results : list of dict
+        Per-realization pipeline outputs from :class:`MonteCarlo`.
+    estimators : dict, optional
+        Mapping from label to spec dict with keys ``truth``,
+        ``get_estimate``, and optionally ``bias_scale``.
+
+    Returns
+    -------
+    dict
+        Mapping from label to dict with keys:
+
+        - ``truth`` — scalar truth value
+        - ``estimates`` — array of per-realization estimated values
+        - ``bias`` — per-realization bias (percent, unless overridden)
+        - ``mean_bias`` — mean bias across realizations
+        - ``std_bias`` — standard deviation of bias
+        - ``rms_bias`` — RMS bias
+    """
+    out = {}
+    for label, spec in estimators.items():
+        truth = spec["truth"]
+        bias_scale = spec.get("bias_scale", 100.0)
+        get_estimate = spec["get_estimate"]
+
+        estimates = []
+        for res in results:
+            raw = np.asarray(get_estimate(res))
+            estimates.append(float(np.nanmean(raw)))
+        estimates = np.array(estimates)
+
+        valid = np.isfinite(estimates)
+        if not np.any(valid):
+            warnings.warn(
+                f"No valid estimates for nuisance parameter '{label}', skipping."
+            )
+            continue
+
+        bias = (estimates / truth - 1.0) * bias_scale
+
+        out[label] = {
+            "truth": truth,
+            "estimates": estimates,
+            "bias": bias,
+            "mean_bias": float(np.mean(bias[valid])),
+            "std_bias": float(np.std(bias[valid])),
+            "rms_bias": float(np.sqrt(np.mean(bias[valid] ** 2))),
+        }
+
+    return out
+
+
+def plot_nuisance_summary(
+    nuisance_stats: dict[str, dict],
+    *,
+    figsize: tuple = (10, 4),
+    nbins: int = 30,
+) -> plt.Figure:
+    """Plot histogram summary of nuisance parameter bias across realizations.
+
+    For each nuisance parameter (e.g. Gamma, Alpha) a histogram of
+    fitted values is shown with the truth value marked as a vertical
+    dashed line. The mean bias and scatter are annotated.
+
+    Parameters
+    ----------
+    nuisance_stats : dict
+        Output from :func:`compute_nuisance_stats`.
+    figsize : tuple
+        Figure width, height.
+    nbins : int
+        Number of histogram bins.
+
+    Returns
+    -------
+    Figure
+    """
+    n_params = len(nuisance_stats)
+    if n_params == 0:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No nuisance parameter data", ha="center", va="center")
+        return fig
+
+    fig, axes = plt.subplots(1, n_params, figsize=figsize, squeeze=False)
+    for ax, (label, s) in zip(axes[0], nuisance_stats.items()):
+        est = s["estimates"]
+        truth = s["truth"]
+        valid = np.isfinite(est)
+        if not np.any(valid):
+            ax.text(0.5, 0.5, "No valid data", ha="center", va="center")
+            continue
+
+        ax.hist(est[valid], bins=nbins, color="steelblue", edgecolor="white", alpha=0.8)
+        ax.axvline(truth, color="k", ls="--", lw=2, label=f"Truth = {truth:.3g}")
+        ax.set_xlabel(f"Fitted {label}")
+        ax.set_ylabel("Realizations")
+
+        # Annotate bias stats
+        mean_b = s["mean_bias"]
+        std_b = s["std_bias"]
+        ax.annotate(
+            f"Bias: {mean_b:+.2f}% ± {std_b:.2f}%",
+            xycoords="axes fraction",
+            xy=(0.05, 0.95),
+            va="top",
+            fontsize=9,
+        )
+        ax.legend(loc="lower right", frameon=False, fontsize=8)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_background_bias(
+    stats: dict[str, dict],
+    *,
+    ax: plt.Axes | None = None,
+    figsize: tuple = (6, 5),
+) -> plt.Axes:
+    """Plot background bias (with RMS shaded region) vs simulated flux.
+
+    Parameters
+    ----------
+    stats : dict
+        Output from :func:`compute_bias_coverage` for a background
+        estimator.
+    ax : Axes, optional
+        Target axes. Created if None.
+    figsize : tuple
+        Figure size when creating a new axes.
+
+    Returns
+    -------
+    Axes
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+
+    for label, s in stats.items():
+        if "rms" in s:
+            ax.fill_between(
+                s["xbins"],
+                s["bias"] - s["rms"],
+                s["bias"] + s["rms"],
+                alpha=0.15,
+                color="c",
+                zorder=3,
+            )
+        ax.errorbar(
+            s["xbins"],
+            s["bias"],
+            yerr=s["bias_err"],
+            marker="o",
+            ls="none",
+            color="c",
+            label=label,
+            zorder=5,
+        )
+
+    ax.axhline(0, color="k", ls="--", alpha=0.3, zorder=0)
+    ax.set_xlabel("Simulated flux [ADU]")
+    ax.set_xscale("log")
+    ax.set_ylabel("Background bias (%)")
+    ax.legend(loc="best", frameon=False)
+
+    return ax
