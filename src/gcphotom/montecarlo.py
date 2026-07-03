@@ -1,7 +1,7 @@
 """Monte Carlo framework for flux estimator bias and coverage analysis.
 
 Provides tools to run multiple realizations of a photometry pipeline and
-compute bias and coverage statistics for the fitted fluxes.
+compute bias and coverage statistics for fitted parameters.
 """
 
 from __future__ import annotations
@@ -19,13 +19,14 @@ from gcphotom.stats import bin_statistic
 
 @dataclass
 class SimulationConfig:
-    """Configuration for a single Monte Carlo simulation run.
+    """Configuration for a Monte Carlo simulation.
+
+    A new random catalog is drawn for each realization.
 
     Parameters
     ----------
-    catalog : Table
-        Source catalog with columns ``x``, ``y``, ``flux``. Kept fixed across
-        realizations; only the noise varies.
+    n_sources : int
+        Number of sources per realization.
     shape : tuple of int
         Image shape (ny, nx).
     gamma : float
@@ -40,11 +41,9 @@ class SimulationConfig:
         Number of pixels for background mesh in ``detect_and_segment``.
     fit_kwargs : dict
         Keyword arguments passed to ``Fitter.fit()``.
-    nbins : int
-        Number of flux bins for bias/coverage statistics.
     """
 
-    catalog: Any
+    n_sources: int = 1000
     shape: tuple = (1024, 1024)
     gamma: float = 3.0
     alpha: float = 3.0
@@ -54,21 +53,25 @@ class SimulationConfig:
     fit_kwargs: dict = field(
         default_factory=lambda: {"learning_rate": 1e-2, "niter": 2000}
     )
-    nbins: int = 10
 
 
-def default_pipeline(image: np.ndarray, cfg: SimulationConfig) -> dict:
+def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> dict:
     """Default photometry pipeline mirroring the flux_reconstruction_quality example.
 
-    Runs detection, COG extraction, iterative fitting with contamination
-    detection, and a fixed-background refit. Also computes PSF photometry
-    and aperture photometry with a constant aperture correction.
+    Parameters
+    ----------
+    image : ndarray
+        Simulated image.
+    catalog : Table
+        Source catalog used for this realization.
+    cfg : SimulationConfig
+        Simulation configuration.
 
     Returns
     -------
     dict
         Keys: ``fitted``, ``fitted_no_back``, ``psf``, ``aperture``,
-        ``input_cat``, ``fitter``.
+        ``input_cat``, ``fitter``, ``catalog``.
     """
     seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
         image, n_pixels=cfg.n_pixels
@@ -91,13 +94,13 @@ def default_pipeline(image: np.ndarray, cfg: SimulationConfig) -> dict:
 
     fitted = fitter.results(best_fit)
     fitted_no_back = fitter.results(best_fit_no_back)
-    input_cat = gcp.cross_match(det_cat, cfg.catalog)
+    input_cat = gcp.cross_match(det_cat, catalog)
 
     # PSF photometry
     psf_results, _ = gcp.psf_photometry(
         image - cfg.background, det_cat, nstars=30, fit_shape=11
     )
-    psf_cat = gcp.cross_match(psf_results, cfg.catalog)
+    psf_cat = gcp.cross_match(psf_results, catalog)
 
     # Aperture photometry with constant correction
     fwhm = gcp.gcmodel.gamma2fwhm(fitted["gamma"], fitted["alpha"])
@@ -121,8 +124,9 @@ def default_pipeline(image: np.ndarray, cfg: SimulationConfig) -> dict:
         "fitted_no_back": fitted_no_back,
         "fitter": fitter,
         "input_cat": input_cat,
+        "catalog": catalog,
         "psf": {"results": psf_results, "cat": psf_cat},
-        "aperture": {"flux": flux_ap_full, "cat": kept_cat},
+        "aperture": {"flux": flux_ap_full},
     }
 
 
@@ -146,18 +150,20 @@ class MonteCarloResults:
 
 
 class MonteCarlo:
-    """Run a photometry pipeline over multiple noisy realizations.
+    """Run a photometry pipeline over multiple independent realizations.
+
+    Each realization draws a new random catalog.
 
     Parameters
     ----------
     config : SimulationConfig
-        Fixed simulation parameters and catalog.
+        Simulation parameters (PSF, noise, image size, etc.).
     n_realizations : int
-        Number of independent noise realizations.
+        Number of independent realizations.
     seed : int or None
         Master random seed. Each realization draws a sub-seed.
     pipeline : callable, optional
-        Function ``(image, config) -> dict``. Defaults to
+        Function ``(image, catalog, config) -> dict``. Defaults to
         :func:`default_pipeline`.
     """
 
@@ -199,9 +205,14 @@ class MonteCarlo:
             if verbose and i % max(1, self.n_realizations // 10) == 0:
                 print(f"  Realization {i + 1}/{self.n_realizations}")
 
+            catalog = gcp.make_realistic_source_catalog(
+                n_sources=self.config.n_sources,
+                shape=self.config.shape,
+                seed=int(seed),
+            )
             image, _ = gcp.simulate_image(
                 shape=self.config.shape,
-                catalog=self.config.catalog,
+                catalog=catalog,
                 gamma=self.config.gamma,
                 alpha=self.config.alpha,
                 background=self.config.background,
@@ -210,7 +221,7 @@ class MonteCarlo:
             )
 
             try:
-                res = self.pipeline(image, self.config)
+                res = self.pipeline(image, catalog, self.config)
                 self._results.append(res)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 warnings.warn(f"Realization {i + 1} failed: {exc}")
@@ -222,51 +233,162 @@ class MonteCarlo:
         )
 
 
-def _estimator_data(
+def _collect_data(
     results: list[dict],
-    get_cat: Callable[[dict], Any],
-    get_flux: Callable[[dict], Any],
-    get_std: Callable[[dict], Any] | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-    """Extract (true_flux, est_flux, std_err) arrays from MC results.
+    get_x: Callable[[dict], np.ndarray],
+    get_truth: Callable[[dict], np.ndarray],
+    get_estimate: Callable[[dict], np.ndarray],
+    get_std: Callable[[dict], np.ndarray] | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    """Collect (x, truth, estimate, std) arrays from MC results.
 
     Parameters
     ----------
     results : list of dict
         Per-realization pipeline outputs.
-    get_cat : callable
-        Extracts the matched catalog from a result dict.
-    get_flux : callable
-        Extracts the estimated flux array from a result dict.
+    get_x : callable
+        Returns the binning variable (e.g. true flux).
+    get_truth : callable
+        Returns the truth value for the parameter of interest.
+    get_estimate : callable
+        Returns the estimated value.
     get_std : callable or None
-        Extracts the standard error array from a result dict.
+        Returns the standard error array.
 
     Returns
     -------
-    true_flux, est_flux, std_err : ndarray
+    x, truth, estimate, std : ndarray
         Flattened arrays over all realizations (NaNs dropped).
     """
-    true_fluxes = []
-    est_fluxes = []
-    std_errs = []
+    xs, truths, ests, stds = [], [], [], []
 
     for res in results:
-        cat = get_cat(res)
-        true_f = np.asarray(cat["flux"])
-        est_f = np.asarray(get_flux(res))
+        x = np.asarray(get_x(res))
+        t = np.asarray(get_truth(res))
+        e = np.asarray(get_estimate(res))
 
-        mask = np.isfinite(true_f) & np.isfinite(est_f)
-        true_fluxes.append(true_f[mask])
-        est_fluxes.append(est_f[mask])
+        mask = np.isfinite(x) & np.isfinite(t) & np.isfinite(e)
+        xs.append(x[mask])
+        truths.append(t[mask])
+        ests.append(e[mask])
 
         if get_std is not None:
-            std_f = np.asarray(get_std(res))
-            std_errs.append(std_f[mask])
+            s = np.asarray(get_std(res))
+            stds.append(s[mask])
 
-    tf = np.concatenate(true_fluxes)
-    ef = np.concatenate(est_fluxes)
-    se = np.concatenate(std_errs) if std_errs else None
-    return tf, ef, se
+    return (
+        np.concatenate(xs),
+        np.concatenate(truths),
+        np.concatenate(ests),
+        np.concatenate(stds) if stds else None,
+    )
+
+
+def _build_estimator_spec(
+    get_x: Callable,
+    get_truth: Callable,
+    get_estimate: Callable,
+    get_std: Callable | None = None,
+    bias_scale: float = 100.0,
+) -> dict:
+    """Build an estimator spec dict from extractor callables."""
+    return {
+        "get_x": get_x,
+        "get_truth": get_truth,
+        "get_estimate": get_estimate,
+        "get_std": get_std,
+        "bias_scale": bias_scale,
+    }
+
+
+def _default_flux_estimators() -> dict[str, dict]:
+    """Build default specs for flux estimators."""
+    return {
+        "GC (est. back)": _build_estimator_spec(
+            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
+            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
+            get_estimate=lambda r: np.asarray(r["fitted"]["flux"]),
+            get_std=lambda r: np.asarray(r["fitted"]["std_errors"]["flux"]),
+        ),
+        "GC (fixed back)": _build_estimator_spec(
+            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
+            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
+            get_estimate=lambda r: np.asarray(r["fitted_no_back"]["flux"]),
+            get_std=lambda r: np.asarray(r["fitted_no_back"]["std_errors"]["flux"]),
+        ),
+        "PSF photometry": _build_estimator_spec(
+            get_x=lambda r: np.asarray(r["psf"]["cat"]["flux"]),
+            get_truth=lambda r: np.asarray(r["psf"]["cat"]["flux"]),
+            get_estimate=lambda r: np.asarray(r["psf"]["results"]["flux_fit"]),
+            get_std=None,
+        ),
+        "Aperture + AC": _build_estimator_spec(
+            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
+            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
+            get_estimate=lambda r: np.asarray(r["aperture"]["flux"]),
+            get_std=None,
+        ),
+    }
+
+
+def _build_nuisance_spec(
+    param: str,
+    truth_value: float,
+    std_key: str | None,
+    bias_scale: float = 100.0,
+) -> dict:
+    """Build estimator spec for a global nuisance parameter.
+
+    The scalar truth value is repeated for each source so the framework
+    can bin by true flux.
+    """
+
+    def get_x(r: dict) -> np.ndarray:
+        return np.asarray(r["input_cat"]["flux"])
+
+    def get_truth(r: dict) -> np.ndarray:
+        return np.full(len(r["input_cat"]), truth_value)
+
+    def get_estimate(r: dict) -> np.ndarray:
+        return np.full(len(r["input_cat"]), np.asarray(r["fitted"][param]))
+
+    if std_key is not None:
+
+        def get_std(r: dict) -> np.ndarray:
+            se = r["fitted"].get("std_errors", {})
+            try:
+                val = np.asarray(se[std_key])
+            except (KeyError, TypeError):
+                val = np.nan
+            return np.full(len(r["input_cat"]), val)
+
+    else:
+        get_std = None
+
+    return _build_estimator_spec(
+        get_x=get_x,
+        get_truth=get_truth,
+        get_estimate=get_estimate,
+        get_std=get_std,
+        bias_scale=bias_scale,
+    )
+
+
+def build_default_estimators(cfg: SimulationConfig) -> dict[str, dict]:
+    """Build the full default estimator specification dict.
+
+    Includes flux estimators and nuisance parameters (background, gamma,
+    alpha).
+    """
+    estimators = _default_flux_estimators()
+    estimators["Background"] = _build_nuisance_spec("back", cfg.background, "back")
+    estimators["Gamma"] = _build_nuisance_spec(
+        "gamma", cfg.gamma, "gamma", bias_scale=100.0
+    )
+    estimators["Alpha"] = _build_nuisance_spec(
+        "alpha", cfg.alpha, "alpha", bias_scale=100.0
+    )
+    return estimators
 
 
 def compute_bias_coverage(
@@ -277,19 +399,17 @@ def compute_bias_coverage(
     bins: np.ndarray | None = None,
     sigma_levels: tuple[float, ...] = (1.0, 2.0, 3.0),
 ) -> dict[str, dict]:
-    """Compute binned bias and coverage for one or more flux estimators.
+    """Compute binned bias, RMS and coverage for one or more estimators.
 
     Parameters
     ----------
     results : list of dict
         Per-realization pipeline outputs from :class:`MonteCarlo`.
     estimators : dict, optional
-        Mapping from label to extractor specification. Each value is a dict
-        with keys ``flux_key``, ``std_key`` (optional), and ``cat_key``
-        (optional). Defaults cover the standard estimators from
-        :func:`default_pipeline`.
+        Mapping from label to spec dict with keys ``get_x``, ``get_truth``,
+        ``get_estimate``, and optionally ``get_std`` and ``bias_scale``.
     nbins : int
-        Number of flux bins.
+        Number of bins along the x-axis.
     bins : ndarray, optional
         Explicit bin edges.
     sigma_levels : tuple of float
@@ -298,75 +418,74 @@ def compute_bias_coverage(
     Returns
     -------
     dict
-        Mapping from label to dict with keys ``xbins``, ``bias``, ``bias_err``,
-        and ``coverage_<sigma>`` for each sigma level.
+        Mapping from label to dict with keys ``xbins``, ``bias``,
+        ``bias_err``, ``rms``, and ``coverage_<sigma>`` for each
+        sigma level.
     """
-    if estimators is None:
-        estimators = {
-            "GC (est. back)": {
-                "get_cat": lambda r: r["input_cat"],
-                "get_flux": lambda r: r["fitted"]["flux"],
-                "get_std": lambda r: r["fitted"]["std_errors"]["flux"],
-            },
-            "GC (fixed back)": {
-                "get_cat": lambda r: r["input_cat"],
-                "get_flux": lambda r: r["fitted_no_back"]["flux"],
-                "get_std": lambda r: r["fitted_no_back"]["std_errors"]["flux"],
-            },
-            "PSF photometry": {
-                "get_cat": lambda r: r["psf"]["cat"],
-                "get_flux": lambda r: r["psf"]["results"]["flux_fit"],
-                "get_std": None,
-            },
-            "Aperture + AC": {
-                "get_cat": lambda r: r["aperture"]["cat"],
-                "get_flux": lambda r: r["aperture"]["flux"],
-                "get_std": None,
-            },
-        }
-
     out = {}
 
     for label, spec in estimators.items():
-        get_cat = spec["get_cat"]
-        get_flux = spec["get_flux"]
+        get_x = spec["get_x"]
+        get_truth = spec["get_truth"]
+        get_estimate = spec["get_estimate"]
         get_std = spec.get("get_std")
+        bias_scale = spec.get("bias_scale", 100.0)
 
-        tf, ef, se = _estimator_data(results, get_cat, get_flux, get_std)
+        x, truth, estimate, se = _collect_data(
+            results, get_x, get_truth, get_estimate, get_std
+        )
 
-        if len(tf) == 0:
+        if len(x) == 0:
             warnings.warn(f"No data for estimator '{label}', skipping.")
             continue
 
-        bias = (ef / tf - 1.0) * 100.0
+        bias = (estimate / truth - 1.0) * bias_scale
 
         if bins is None:
-            valid = np.isfinite(tf) & np.isfinite(bias)
-            xb, _, _ = _quick_bins(tf[valid], nbins)
+            from gcphotom.stats import _build_bins
+
+            valid = np.isfinite(x) & np.isfinite(bias)
+            edges = _build_bins(x[valid], nbins, logbins=True)
         else:
-            xb = 0.5 * (bins[:-1] + bins[1:])
+            edges = bins
+        xb = 0.5 * (edges[:-1] + edges[1:])
 
         _, bias_binned, bias_err = bin_statistic(
-            tf,
+            x,
             bias,
             nbins=nbins,
-            bins=bins,
+            bins=edges,
             logbins=bins is None,
             method="median",
             scale_err=True,
         )
 
-        entry = {"xbins": xb, "bias": bias_binned, "bias_err": bias_err}
+        _, rms_binned, _ = bin_statistic(
+            x,
+            np.abs(bias),
+            nbins=nbins,
+            bins=edges,
+            logbins=bins is None,
+            method="median",
+            scale_err=True,
+        )
+
+        entry = {
+            "xbins": xb,
+            "bias": bias_binned,
+            "bias_err": bias_err,
+            "rms": rms_binned,
+        }
 
         if se is not None:
-            resids = np.abs(ef - tf)
             for sigma in sigma_levels:
+                resids = np.abs(estimate - truth)
                 covered = (resids <= sigma * se).astype(float)
                 _, cov_binned, _ = bin_statistic(
-                    tf,
+                    x,
                     covered,
                     nbins=nbins,
-                    bins=bins,
+                    bins=edges,
                     logbins=bins is None,
                     method="mean",
                     scale_err=False,
@@ -381,15 +500,6 @@ def compute_bias_coverage(
     return out
 
 
-def _quick_bins(x: np.ndarray, nbins: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Build log-spaced bins and return centers, edges, and a dummy."""
-    from gcphotom.stats import _build_bins
-
-    edges = _build_bins(x, nbins, logbins=True)
-    centers = 0.5 * (edges[:-1] + edges[1:])
-    return centers, edges, np.zeros(len(centers))
-
-
 def plot_bias_coverage(
     stats: dict[str, dict],
     *,
@@ -399,7 +509,7 @@ def plot_bias_coverage(
     expected_coverage: float | None = None,
     figsize: tuple = (12, 8),
 ) -> tuple[plt.Axes, plt.Axes]:
-    """Plot bias and coverage as a function of simulated flux.
+    """Plot bias (with RMS shaded region) and coverage vs. simulated flux.
 
     Parameters
     ----------
@@ -411,7 +521,6 @@ def plot_bias_coverage(
         Which sigma level's coverage to plot.
     expected_coverage : float, optional
         Expected coverage fraction at ``sigma_level`` (e.g. 0.683 for 1-sigma).
-        Plotted as a horizontal reference line.
     figsize : tuple
         Figure size when creating new axes.
 
@@ -431,10 +540,24 @@ def plot_bias_coverage(
         "GC (fixed back)": "r",
         "PSF photometry": "b",
         "Aperture + AC": "m",
+        "Background": "c",
+        "Gamma": "g",
+        "Alpha": "orange",
     }
 
     for label, s in stats.items():
         color = colors.get(label, "k")
+
+        # Shaded RMS region
+        if "rms" in s:
+            ax_bias.fill_between(
+                s["xbins"],
+                s["bias"] - s["rms"],
+                s["bias"] + s["rms"],
+                alpha=0.15,
+                color=color,
+                zorder=3,
+            )
 
         ax_bias.errorbar(
             s["xbins"],
