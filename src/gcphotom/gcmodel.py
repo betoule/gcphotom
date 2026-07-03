@@ -200,6 +200,7 @@ class Fitter:
         desc=None,
         loss=None,
         fix=None,
+        compute_uncertainty=True,
     ):
         """Fit using Adam optimizer with a robust M-estimator loss.
 
@@ -230,6 +231,13 @@ class Fitter:
                 fit(loss=lambda x: x**2)             — standard chi2
                 fit(loss=lambda x: jnp.abs(x))       — L1 loss
 
+        compute_uncertainty : bool
+            If ``True`` (default), compute parameter covariance and standard
+            errors via the Jacobian of weighted residuals (adds ~1.5 s to
+            the fit).  Set to ``False`` when only best-fit values are needed.
+            When ``False``, ``extra`` will contain ``None`` for both
+            ``covariance`` and ``std_errors``.
+
         Returns
         -------
         best_params : dict
@@ -253,7 +261,13 @@ class Fitter:
             for p in fix:
                 initial_guess.pop(p)
             wr = lambda p: self.weighted_residuals({**p, **fix})
-        loss_fn = jax.jit(lambda p: jnp.mean(loss_fn_(wr(p))))
+
+        # JIT-compile the residual function so that jacfwd in
+        # parameter_uncertainty traces through compiled jaxprs instead of
+        # compiling each operation eagerly — cuts ~2.5s off the first fit.
+        wr_jit = jax.jit(wr)
+
+        loss_fn = lambda p: jnp.mean(loss_fn_(wr_jit(p)))
         bf, extra = jaxfitter.fit_adam(
             loss_fn,
             initial_guess,
@@ -266,10 +280,14 @@ class Fitter:
         if show:
             plt.plot(extra["loss"])
 
-        extra["covariance"], extra["std_errors"] = jaxfitter.parameter_uncertainty(
-            lambda p: wr(p)[self.goods], bf
-        )
-        self._std_errors = extra["std_errors"]
+        if compute_uncertainty:
+            extra["covariance"], extra["std_errors"] = jaxfitter.parameter_uncertainty(
+                lambda p: wr_jit(p)[self.goods], bf
+            )
+            self._std_errors = extra["std_errors"]
+        else:
+            extra["covariance"] = extra["std_errors"] = None
+
         return bf, extra
 
     def initial_guess(self, alpha=3.0):
@@ -287,21 +305,26 @@ class Fitter:
                 "flux": jnp.array([]),
                 "back": jnp.array([]),
             }
+
+        # Use numpy for these one-off setup computations to avoid per-op
+        # JAX compilation; the initial-guess dict is converted to JAX
+        # arrays automatically when traced inside the JIT-compiled step.
         n_radii = self.fluxes.shape[0]
+        fluxes_np = np.asarray(self.fluxes)
+        radii_np = np.asarray(self.radii)
         a1 = max(2, n_radii // 5)
         a2 = max(5, n_radii // 2)
-        f_inner = self.fluxes[:a1, :].sum(axis=0)
-        f_outer = self.fluxes[:a2, :].sum(axis=0)
-        ac = float(jnp.nanmedian(f_outer / f_inner))
+        f_inner = fluxes_np[:a1, :].sum(axis=0)
+        f_outer = fluxes_np[:a2, :].sum(axis=0)
+        ac = float(np.nanmedian(f_outer / f_inner))
         estimate = f_inner * ac
-        self.estimate = estimate
-        self.background_estimate = self.fluxes[-1, :] / (
-            jnp.pi * (self.radii[-1] ** 2 - self.radii[-2] ** 2)
+        self.estimate = jnp.array(estimate)
+        self.background_estimate = jnp.array(
+            fluxes_np[-1, :] / (np.pi * (radii_np[-1] ** 2 - radii_np[-2] ** 2))
         )
-        gamma_est = 3.0
 
         return {
-            "gamma": gamma_est,
+            "gamma": 3.0,
             "alpha": alpha,
             "flux": jnp.ones(nsrc),
             "back": self.background_estimate,

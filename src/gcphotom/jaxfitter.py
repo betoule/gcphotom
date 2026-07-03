@@ -1,22 +1,35 @@
 """Optimizers for growth-curve fitting."""
 
 import time
+from functools import partial
 
 import jax
 import jax.numpy as jnp
+import optax
 from tqdm.auto import tqdm
+
+
+@partial(jax.jit, static_argnums=(2, 3, 4))
+def _adam_step(params, opt_state, func, grad_func, optimizer):
+    """Single Adam step: gradient, update, then loss at the new params.
+
+    ``func``, ``grad_func`` and ``optimizer`` are static to let JAX's
+    compilation cache reuse the compiled kernel when they haven't changed.
+    """
+    grads = grad_func(params)
+    updates, opt_state = optimizer.update(grads, opt_state)
+    params = optax.apply_updates(params, updates)
+    return params, func(params), opt_state
 
 
 def fit_adam(
     func,
     init_params,
-    grad_func=None,
     learning_rate=5e-3,
     niter=200,
     tol=1e-3,
     show_progress=True,
     desc="Fitting",
-    **kwargs,
 ):
     """simple Adam gradient descent using optax.adam
 
@@ -44,8 +57,6 @@ def fit_adam(
     desc: str
         Label for the progress bar.
 
-    **kwargs other func entries
-
     Returns
     -------
     list
@@ -53,10 +64,6 @@ def fit_adam(
         - loss (array)
     """
     tstart = time.time()
-    import optax
-
-    # handle kwargs more easily
-    func_ = lambda x: func(x, **kwargs)
 
     # Initialize the adam optimizer
     params = init_params
@@ -64,26 +71,21 @@ def fit_adam(
     # Obtain the `opt_state` that contains statistics for the optimizer.
     opt_state = optimizer.init(params)
 
-    if grad_func is None:
-        grad_func = jax.jit(jax.grad(func_))  # get the derivative
+    # pre-compile the gradient function
+    grad_func = jax.jit(jax.grad(func))
 
     # and do the gradient descent
-    losses = [func_(params)]
+    losses = [func(params)]
 
     timings = [0]
-
-    @jax.jit
-    def step(params, opt_state):
-        current_grads = grad_func(params)
-        updates, opt_state = optimizer.update(current_grads, opt_state)
-        params = optax.apply_updates(params, updates)
-        return params, func_(params), opt_state
 
     with tqdm(
         total=niter, desc=desc, disable=not show_progress, unit="iter", leave=False
     ) as pbar:
         for i in range(niter):
-            params, loss, opt_state = step(params, opt_state)
+            params, loss, opt_state = _adam_step(
+                params, opt_state, func, grad_func, optimizer
+            )
             losses.append(loss)  # store the loss function
             timings.append(time.time() - tstart)
             pbar.set_postfix(loss=f"{loss:.4f}")
