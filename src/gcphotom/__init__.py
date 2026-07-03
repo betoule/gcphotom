@@ -17,7 +17,7 @@ from gcphotom.simulator import (
     make_test_source_catalog,
 )
 
-from . import match  # public submodule
+from . import match, montecarlo  # public submodules
 
 __all__ = [
     "cross_match",
