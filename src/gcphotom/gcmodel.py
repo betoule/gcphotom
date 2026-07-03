@@ -196,6 +196,8 @@ class Fitter:
         niter=10000,
         learning_rate=5e-3,
         show=False,
+        show_progress=True,
+        desc=None,
         loss=None,
         fix=None,
     ):
@@ -211,6 +213,10 @@ class Fitter:
             Adam learning rate.
         show : bool
             If ``True``, plot the loss curve.
+        show_progress : bool
+            If ``True``, display a progress bar during optimization.
+        desc : str or None
+            Label for the progress bar.  If ``None``, a default is used.
         loss : callable or None
             Loss function ``f(weighted_residual) -> per-element loss``.
             Defaults to Tukey's bisquare with ``c=4.685``
@@ -249,7 +255,13 @@ class Fitter:
             wr = lambda p: self.weighted_residuals({**p, **fix})
         loss_fn = jax.jit(lambda p: jnp.mean(loss_fn_(wr(p))))
         bf, extra = jaxfitter.fit_adam(
-            loss_fn, initial_guess, niter=niter, learning_rate=learning_rate, tol=None
+            loss_fn,
+            initial_guess,
+            niter=niter,
+            learning_rate=learning_rate,
+            tol=None,
+            show_progress=show_progress,
+            desc=desc or "Fitting",
         )
         if show:
             plt.plot(extra["loss"])

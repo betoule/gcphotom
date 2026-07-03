@@ -25,7 +25,7 @@ def mc_config():
 def mc_results(mc_config):
     """Run 3 MC realizations and return results."""
     mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=3, seed=42)
-    summary = mc.run(verbose=False)
+    summary = mc.run(verbose=False, show_progress=False)
     return mc, summary
 
 
@@ -114,7 +114,7 @@ class TestMonteCarlo:
 
     def test_results_are_independent(self, mc_config):
         mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=3, seed=42)
-        mc.run(verbose=False)
+        mc.run(verbose=False, show_progress=False)
         assert len(mc.results) > 0
 
         fluxes = [np.asarray(r["fitted"]["flux"]) for r in mc.results]
@@ -128,10 +128,14 @@ class TestMonteCarlo:
                 image, n_pixels=cfg.n_pixels
             )
             cog = gcp.extract_growth_curves(
-                image, det_cat, segmentation_image=seg, background_variance=bkg_var
+                image,
+                det_cat,
+                segmentation_image=seg,
+                background_variance=bkg_var,
+                show_progress=False,
             )
             fitter = gcp.Fitter(cog)
-            bf, _ = fitter.fit(**cfg.fit_kwargs)
+            bf, _ = fitter.fit(**cfg.fit_kwargs, show_progress=False)
             fitted = fitter.results(bf)
             input_cat = gcp.cross_match(det_cat, catalog)
             return {
@@ -144,7 +148,7 @@ class TestMonteCarlo:
         mc = gcp.montecarlo.MonteCarlo(
             mc_config, n_realizations=2, seed=42, pipeline=simple_pipeline
         )
-        summary = mc.run(verbose=False)
+        summary = mc.run(verbose=False, show_progress=False)
         assert summary.realized > 0
 
     def test_failed_realization_is_warned(self, mc_config):
@@ -155,7 +159,7 @@ class TestMonteCarlo:
             mc_config, n_realizations=2, seed=42, pipeline=failing_pipeline
         )
         with pytest.warns(UserWarning):
-            summary = mc.run(verbose=False)
+            summary = mc.run(verbose=False, show_progress=False)
         assert summary.realized == 0
 
 
@@ -215,7 +219,7 @@ class TestComputeBiasCoverage:
 
     def test_bias_is_reasonable(self, mc_config):
         mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=5, seed=42)
-        mc.run(verbose=False)
+        mc.run(verbose=False, show_progress=False)
 
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
@@ -226,7 +230,7 @@ class TestComputeBiasCoverage:
 
     def test_coverage_is_between_0_and_1(self, mc_config):
         mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=5, seed=42)
-        mc.run(verbose=False)
+        mc.run(verbose=False, show_progress=False)
 
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
@@ -237,7 +241,7 @@ class TestComputeBiasCoverage:
 
     def test_rms_is_non_negative(self, mc_config):
         mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=5, seed=42)
-        mc.run(verbose=False)
+        mc.run(verbose=False, show_progress=False)
 
         estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(

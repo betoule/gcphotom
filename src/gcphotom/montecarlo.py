@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm.auto import tqdm
 
 import gcphotom as gcp
 from gcphotom.stats import bin_statistic
@@ -79,17 +80,22 @@ def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> 
     bads = (det_cat.ellipticity * det_cat.area).value > 6
 
     cog = gcp.extract_growth_curves(
-        image, det_cat, segmentation_image=seg, background_variance=bkg_var_map
+        image,
+        det_cat,
+        segmentation_image=seg,
+        background_variance=bkg_var_map,
+        desc="COG",
     )
 
     fitter = gcp.Fitter(cog, bads=bads)
-    best_fit, _ = fitter.fit(**cfg.fit_kwargs)
+    best_fit, _ = fitter.fit(**cfg.fit_kwargs, desc="Fit (1)")
     fitter.detect_contamination(best_fit)
-    best_fit, _ = fitter.fit(**cfg.fit_kwargs)
+    best_fit, _ = fitter.fit(**cfg.fit_kwargs, desc="Fit (2)")
 
     best_fit_no_back, _ = fitter.fit(
         **cfg.fit_kwargs,
         fix={"back": np.full(len(best_fit["back"]), np.mean(best_fit["back"]))},
+        desc="Fit (fix back)",
     )
 
     fitted = fitter.results(best_fit)
@@ -185,13 +191,18 @@ class MonteCarlo:
         """List of per-realization pipeline outputs."""
         return self._results
 
-    def run(self, verbose: bool = True) -> MonteCarloResults:
+    def run(
+        self, verbose: bool = True, show_progress: bool = True
+    ) -> MonteCarloResults:
         """Execute all realizations.
 
         Parameters
         ----------
         verbose : bool
-            Print progress every 10 realizations.
+            Print progress every 10 realizations (legacy, use ``show_progress``
+            instead).
+        show_progress : bool
+            If ``True``, display a progress bar.
 
         Returns
         -------
@@ -201,8 +212,18 @@ class MonteCarlo:
         rng = np.random.default_rng(self.seed)
         seeds = rng.integers(0, 2**31, self.n_realizations)
 
+        pbar = tqdm(
+            total=self.n_realizations,
+            desc="Monte Carlo",
+            disable=not show_progress,
+            unit="real",
+        )
         for i, seed in enumerate(seeds):
-            if verbose and i % max(1, self.n_realizations // 10) == 0:
+            if (
+                not show_progress
+                and verbose
+                and i % max(1, self.n_realizations // 10) == 0
+            ):
                 print(f"  Realization {i + 1}/{self.n_realizations}")
 
             catalog = gcp.make_realistic_source_catalog(
@@ -225,7 +246,10 @@ class MonteCarlo:
                 self._results.append(res)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 warnings.warn(f"Realization {i + 1} failed: {exc}")
+            finally:
+                pbar.update(1)
 
+        pbar.close()
         return MonteCarloResults(
             realized=len(self._results),
             total=self.n_realizations,

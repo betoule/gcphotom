@@ -6,6 +6,7 @@ from photutils.segmentation import (
     deblend_sources,
     SourceCatalog,
 )
+from tqdm.auto import tqdm
 
 from .background import estimate_background
 from .match import cross_match as _cross_match  # re-export for backward compat
@@ -79,7 +80,13 @@ def _as_positions(sources):
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 def extract_growth_curves(
-    image, sources, radii=None, background_variance=None, segmentation_image=None
+    image,
+    sources,
+    radii=None,
+    background_variance=None,
+    segmentation_image=None,
+    show_progress=True,
+    desc="Extracting",
 ):
     """Extract circular growth curves for multiple sources.
 
@@ -105,6 +112,10 @@ def extract_growth_curves(
     segmentation_image : `~photutils.segmentation.SegmentationImage` or None
         Segmentation map from :func:`detect_and_segment`. If provided,
         contamination from neighboring sources is estimated.
+    show_progress : bool
+        If ``True``, display a progress bar during extraction.
+    desc : str
+        Label for the progress bar.
 
     Returns
     -------
@@ -145,7 +156,14 @@ def extract_growth_curves(
     if segmentation_image is not None:
         seg_data = segmentation_image.data
 
-    for i, pos in enumerate(positions):
+    for i, pos in tqdm(
+        enumerate(positions),
+        total=n_sources,
+        desc=desc,
+        disable=not show_progress,
+        unit="src",
+        leave=False,
+    ):
         _, profile, profile_err = _extract_single_growth_curve(
             image, pos, radii, error=error
         )

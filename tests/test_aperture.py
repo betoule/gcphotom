@@ -71,7 +71,7 @@ class TestExtractGrowthCurves:
         img, _ = simulate_image(shape, cat, gamma=2.5, alpha=3.0, background=0, seed=42)
         positions = np.column_stack([cat["x"], cat["y"]])
         radii = np.arange(1, 20, 0.5)
-        result = extract_growth_curves(img, positions, radii)
+        result = extract_growth_curves(img, positions, radii, show_progress=False)
 
         assert len(result["radius"]) == len(radii)
         assert result["flux"].shape == (5, len(radii))
@@ -90,7 +90,11 @@ class TestExtractGrowthCurves:
         radii = np.arange(1, 20, 0.5)
         bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
         result = extract_growth_curves(
-            img - 100, positions, radii, background_variance=bkg_var
+            img - 100,
+            positions,
+            radii,
+            background_variance=bkg_var,
+            show_progress=False,
         )
         assert np.all(result["background_var"] >= 0)
 
@@ -101,7 +105,7 @@ class TestExtractGrowthCurves:
         cat["y"][0] = 64
         img, _ = simulate_image(shape, cat, gamma=2.5, alpha=3.0, background=0, seed=42)
         positions = np.column_stack([cat["x"], cat["y"]])
-        result = extract_growth_curves(img, positions)
+        result = extract_growth_curves(img, positions, show_progress=False)
 
         assert len(result["radius"]) > 2
         assert result["radius"][0] > 0
@@ -156,6 +160,7 @@ class TestExtractGrowthCurvesWithSegmentation:
             sub,
             np.column_stack([cat.x_centroid, cat.y_centroid]),
             segmentation_image=seg,
+            show_progress=False,
         )
         assert "contamination" in result
         assert "flux_clean" in result
@@ -165,7 +170,7 @@ class TestExtractGrowthCurvesWithSegmentation:
         sub = img - 100
         seg, cat, _, _ = detect_and_segment(img, background=100)
         result = extract_growth_curves(
-            sub, np.column_stack([cat.x_centroid, cat.y_centroid])
+            sub, np.column_stack([cat.x_centroid, cat.y_centroid]), show_progress=False
         )
         assert "flux_clean" in result
         assert "contamination" in result
@@ -180,6 +185,7 @@ class TestExtractGrowthCurvesWithSegmentation:
             sub,
             np.column_stack([cat.x_centroid, cat.y_centroid]),
             segmentation_image=seg,
+            show_progress=False,
         )
         # Contamination for isolated source is flux in PSF wings outside segment.
         # It should be a small fraction of total flux.
@@ -195,6 +201,7 @@ class TestExtractGrowthCurvesWithSegmentation:
             np.column_stack([cat.x_centroid, cat.y_centroid]),
             radii=radii,
             segmentation_image=seg,
+            show_progress=False,
         )
         assert len(cat) == 2
         assert np.any(result["contamination"] > 0)
@@ -207,6 +214,7 @@ class TestExtractGrowthCurvesWithSegmentation:
             sub,
             np.column_stack([cat.x_centroid, cat.y_centroid]),
             segmentation_image=seg,
+            show_progress=False,
         )
         assert result["contamination"].shape[0] == len(cat)
         assert np.all(result["contamination"] >= 0)
@@ -242,44 +250,52 @@ class TestExtractGrowthCurvesCatalogInput:
         seg, cat, _, _ = detect_and_segment(img, background=100)
         # build a Table from the catalog
         tab = Table({"x": cat.x_centroid, "y": cat.y_centroid})
-        result = extract_growth_curves(img, tab, segmentation_image=seg)
+        result = extract_growth_curves(
+            img, tab, segmentation_image=seg, show_progress=False
+        )
         assert result["flux"].shape[0] == len(cat)
 
     def test_extract_accepts_source_catalog(self, controlled_catalog):
         img = controlled_catalog([(70, 70)])
         seg, cat, _, _ = detect_and_segment(img, background=100)
-        result = extract_growth_curves(img, cat, segmentation_image=seg)
+        result = extract_growth_curves(
+            img, cat, segmentation_image=seg, show_progress=False
+        )
         assert result["flux"].shape[0] == 1
 
     def test_auto_background_variance(self, controlled_catalog):
         img = controlled_catalog([(80, 80)])
         seg, cat, _, _ = detect_and_segment(img, background=100)
         # do not pass background_variance -> auto inside
-        result = extract_growth_curves(img, cat, segmentation_image=seg)
+        result = extract_growth_curves(
+            img, cat, segmentation_image=seg, show_progress=False
+        )
         assert np.all(result["background_var"] >= 0)
 
     def test_extract_accepts_positions_list(self, controlled_catalog):
         img = controlled_catalog([(55, 55)])
         seg, cat, _, _ = detect_and_segment(img, background=100)
         poss = [[float(cat.x_centroid[0]), float(cat.y_centroid[0])]]
-        result = extract_growth_curves(img, poss, segmentation_image=seg)
+        result = extract_growth_curves(
+            img, poss, segmentation_image=seg, show_progress=False
+        )
         assert result["flux"].shape[0] == 1
 
     def test_extract_rejects_bad_sources(self, controlled_catalog):
         img = controlled_catalog([(90, 90)])
         with pytest.raises(TypeError):
-            extract_growth_curves(img, "not-positions")
+            extract_growth_curves(img, "not-positions", show_progress=False)
 
     def test_extract_rejects_1d_array(self, controlled_catalog):
         img = controlled_catalog([(88, 88)])
         with pytest.raises(TypeError):
-            extract_growth_curves(img, np.array([1.0, 2.0]))
+            extract_growth_curves(img, np.array([1.0, 2.0]), show_progress=False)
 
     def test_extract_table_without_xy_raises(self, controlled_catalog):
         img = controlled_catalog([(95, 95)])
         bad = Table({"a": [1], "b": [2]})
         with pytest.raises(TypeError):
-            extract_growth_curves(img, bad)
+            extract_growth_curves(img, bad, show_progress=False)
 
     def test_deblend_splits_close_pair(self, controlled_catalog):
         # two sources ~6 px apart form a single blob without deblending
@@ -313,6 +329,7 @@ class TestExtractGrowthCurvesCatalogInput:
             img - 100,
             np.column_stack([cat.x_centroid, cat.y_centroid]),
             background_variance=bkg_var,
+            show_progress=False,
         )
         assert result["background_var"].shape[0] == len(cat)
         assert np.all(result["background_var"] > 0)

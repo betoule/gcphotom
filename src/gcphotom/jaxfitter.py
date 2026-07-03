@@ -4,10 +4,19 @@ import time
 
 import jax
 import jax.numpy as jnp
+from tqdm.auto import tqdm
 
 
 def fit_adam(
-    func, init_params, grad_func=None, learning_rate=5e-3, niter=200, tol=1e-3, **kwargs
+    func,
+    init_params,
+    grad_func=None,
+    learning_rate=5e-3,
+    niter=200,
+    tol=1e-3,
+    show_progress=True,
+    desc="Fitting",
+    **kwargs,
 ):
     """simple Adam gradient descent using optax.adam
 
@@ -28,6 +37,12 @@ def fit_adam(
 
     tol: None or float
         targeted func variations below which the iteration will stop
+
+    show_progress: bool
+        If True, display a progress bar.
+
+    desc: str
+        Label for the progress bar.
 
     **kwargs other func entries
 
@@ -64,12 +79,17 @@ def fit_adam(
         params = optax.apply_updates(params, updates)
         return params, func_(params), opt_state
 
-    for i in range(niter):
-        params, loss, opt_state = step(params, opt_state)
-        losses.append(loss)  # store the loss function
-        timings.append(time.time() - tstart)
-        if tol is not None and (i > 2 and ((losses[-2] - losses[-1]) < tol)):
-            break
+    with tqdm(
+        total=niter, desc=desc, disable=not show_progress, unit="iter", leave=False
+    ) as pbar:
+        for i in range(niter):
+            params, loss, opt_state = step(params, opt_state)
+            losses.append(loss)  # store the loss function
+            timings.append(time.time() - tstart)
+            pbar.set_postfix(loss=f"{loss:.4f}")
+            pbar.update(1)
+            if tol is not None and (i > 2 and ((losses[-2] - losses[-1]) < tol)):
+                break
     timings = jnp.array(timings)
     return params, {"loss": jnp.array(losses), "timings": timings}
 

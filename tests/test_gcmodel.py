@@ -73,9 +73,9 @@ class TestMoffatFunctions:
     def test_residuals_mask_and_plot(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=300)
+        bf, _ = f.fit(show_progress=False, niter=300)
         r = f.residuals(bf, mask=True)
         assert r.shape[0] > 0
         # non-masked path
@@ -101,14 +101,14 @@ class TestMoffatFunctions:
         }
         f = Fitter(gc0)
         with pytest.raises(ValueError):
-            f.fit(niter=1)
+            f.fit(show_progress=False, niter=1)
 
     def test_fit_show_plots(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=100, show=True)
+        bf, _ = f.fit(show_progress=False, niter=100, show=True)
         assert bf is not None
         plt.close("all")
 
@@ -117,7 +117,7 @@ class TestFitterInit:
     def test_init_shapes(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
         assert f.fluxes.shape[1] <= len(cat)
         assert f.fluxes.shape[0] == len(gc["radius"])
@@ -142,9 +142,9 @@ class TestFitterInit:
     def test_results_all_dropped(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
+        bf, _ = f.fit(show_progress=False, niter=500)
         # Force all goods to False to simulate total rejection
         f.goods = jnp.zeros_like(f.goods)
         f._cut()
@@ -157,9 +157,9 @@ class TestFitterInit:
         """rescale_params correctly reverses flux normalization."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
+        bf, _ = f.fit(show_progress=False, niter=500)
         rp = f.rescale_params(bf)
 
         n_cur = f.fluxes.shape[1]
@@ -174,9 +174,9 @@ class TestFitterInit:
         """rescale_params includes std_errors with rescaled flux uncertainty."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
+        bf, _ = f.fit(show_progress=False, niter=500)
         rp = f.rescale_params(bf)
 
         assert "std_errors" in rp
@@ -188,7 +188,7 @@ class TestFitterInit:
         """expand_to_original returns arrays of original input length."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
         n_orig = f._orig_n
         n_cur = f.fluxes.shape[1]
@@ -211,9 +211,9 @@ class TestFitterInit:
         """goodness returns ngoods and chi2 per source."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
+        bf, _ = f.fit(show_progress=False, niter=500)
         g = f.goodness(bf)
 
         n_cur = f.fluxes.shape[1]
@@ -226,9 +226,9 @@ class TestFitterInit:
         """goodness chi2 values are finite."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
+        bf, _ = f.fit(show_progress=False, niter=500)
         g = f.goodness(bf)
         assert np.all(np.isfinite(g["chi2"]))
 
@@ -236,7 +236,7 @@ class TestFitterInit:
         """Direct chi2 call covers the standalone chi2() method."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
         ig = f.initial_guess()
         val = float(f.chi2(ig))
@@ -248,9 +248,9 @@ class TestFitterFit:
     def test_flux_recovery(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=5000, learning_rate=1e-2)
+        bf, _ = f.fit(show_progress=False, niter=5000, learning_rate=1e-2)
         res = f.results(bf)
 
         ratios = res["flux"] / cat["flux"]
@@ -263,9 +263,9 @@ class TestFitterFit:
         true_gamma = 2.5
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=5000, learning_rate=1e-2)
+        bf, _ = f.fit(show_progress=False, niter=5000, learning_rate=1e-2)
 
         assert bf["gamma"] > 0
         assert float(bf["gamma"]) < true_gamma * 3
@@ -274,11 +274,11 @@ class TestFitterFit:
     def test_chi2_decreases(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
         ig = f.initial_guess()
         chi2_before = float(f.chi2(ig))
-        bf, extra = f.fit(niter=5000, learning_rate=1e-2)
+        bf, extra = f.fit(show_progress=False, niter=5000, learning_rate=1e-2)
         chi2_after = float(f.chi2(bf))
         assert chi2_after < chi2_before
 
@@ -290,10 +290,10 @@ class TestFitterBackground:
         positions = np.column_stack([cat["x"], cat["y"]])
         bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
         gc = gcp.extract_growth_curves(
-            img - 100, positions, background_variance=bkg_var
+            img - 100, positions, background_variance=bkg_var, show_progress=False
         )
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=5000, learning_rate=1e-2)
+        bf, _ = f.fit(show_progress=False, niter=5000, learning_rate=1e-2)
         res = f.results(bf)
 
         assert np.median(np.abs(res["back"])) < 1.0
@@ -304,10 +304,10 @@ class TestFitterBackground:
         positions = np.column_stack([cat["x"], cat["y"]])
         bkg_var = np.full_like(img, 9.0)  # read_noise=3 → variance=9
         gc = gcp.extract_growth_curves(
-            img - 100, positions, background_variance=bkg_var
+            img - 100, positions, background_variance=bkg_var, show_progress=False
         )
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=5000, learning_rate=1e-2)
+        bf, _ = f.fit(show_progress=False, niter=5000, learning_rate=1e-2)
         res = f.results(bf)
 
         ratios = res["flux"] / cat["flux"]
@@ -319,9 +319,9 @@ class TestFitterResults:
     def test_results_keys_and_shapes(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=1000)
+        bf, _ = f.fit(show_progress=False, niter=1000)
         res = f.results(bf)
 
         for key in ("flux", "back", "gamma", "alpha", "ngoods", "chi2"):
@@ -339,9 +339,9 @@ class TestFitterHelpers:
     def test_detect_contamination_reduces_goods(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=1000)
+        bf, _ = f.fit(show_progress=False, niter=1000)
         goods_before = int(f.goods.sum())
         f.detect_contamination(bf)
         goods_after = int(f.goods.sum())
@@ -350,13 +350,13 @@ class TestFitterHelpers:
     def test_results_expanded_with_nans_after_contamination(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=1000)
+        bf, _ = f.fit(show_progress=False, niter=1000)
         n_before = len(positions)
         f.detect_contamination(bf)
         # re-fit after contamination to get a consistent bf
-        bf2, _ = f.fit(niter=1000)
+        bf2, _ = f.fit(show_progress=False, niter=1000)
         res_after = f.results(bf2)
         assert len(res_after["flux"]) == n_before
         # entries are NaN where sources were dropped
@@ -366,9 +366,9 @@ class TestFitterHelpers:
     def test_plot_psf_returns_axes(self, small_sim):
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=1000)
+        bf, _ = f.fit(show_progress=False, niter=1000)
         ax1, ax2 = f.plot_PSF(bf)
         assert ax1 is not None
         assert ax2 is not None
@@ -384,9 +384,9 @@ class TestFullPipeline:
         )
         positions = np.column_stack([cat["x"], cat["y"]])
         # Use auto background variance estimate (background=50, read_noise=0 in simulation)
-        gc = gcp.extract_growth_curves(img - 50, positions)
+        gc = gcp.extract_growth_curves(img - 50, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=5000, learning_rate=1e-2)
+        bf, _ = f.fit(show_progress=False, niter=5000, learning_rate=1e-2)
         res = f.results(bf)
 
         ratios = res["flux"] / np.array(cat["flux"])
@@ -415,9 +415,9 @@ class TestRobustLoss:
         """Default fit uses Pseudo-Huber and converges."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, extra = f.fit(niter=500)
+        bf, extra = f.fit(show_progress=False, niter=500)
         assert bf is not None
         assert float(extra["loss"][-1]) < float(extra["loss"][0]) * 0.99
 
@@ -425,9 +425,9 @@ class TestRobustLoss:
         """User-provided lambda equivalent to chi2 works."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, extra = f.fit(niter=500, loss=lambda x: x**2)
+        bf, extra = f.fit(show_progress=False, niter=500, loss=lambda x: x**2)
         assert bf is not None
         assert float(extra["loss"][-1]) < float(extra["loss"][0]) * 0.99
 
@@ -435,9 +435,9 @@ class TestRobustLoss:
         """detect_contamination still works after a robust fit."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
+        bf, _ = f.fit(show_progress=False, niter=500)
         goods_before = int(f.goods.sum())
         f.detect_contamination(bf)
         goods_after = int(f.goods.sum())
@@ -451,7 +451,9 @@ class TestRobustLoss:
 
         params = {"a": 0.0}
         # Huge tolerance triggers early break
-        result, extra = fit_adam(quadratic, params, tol=1e30, niter=1000)
+        result, extra = fit_adam(
+            quadratic, params, tol=1e30, niter=1000, show_progress=False
+        )
         assert len(extra["loss"]) < 50  # broke early due to tol
 
     def test_tukey_gradient_bounded(self):
@@ -484,9 +486,9 @@ class TestUncertainty:
         """Helper: fit and return results."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, extra = f.fit(niter=500)
+        bf, extra = f.fit(show_progress=False, niter=500)
         return f.results(bf), f, bf, extra
 
     def test_results_includes_std_errors(self, small_sim):
@@ -528,11 +530,11 @@ class TestUncertainty:
         """Uncertainty still works after detect_contamination."""
         img, cat = small_sim
         positions = np.column_stack([cat["x"], cat["y"]])
-        gc = gcp.extract_growth_curves(img, positions)
+        gc = gcp.extract_growth_curves(img, positions, show_progress=False)
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(niter=500)
+        bf, _ = f.fit(show_progress=False, niter=500)
         f.detect_contamination(bf)
-        bf2, _ = f.fit(niter=500)
+        bf2, _ = f.fit(show_progress=False, niter=500)
         result = f.results(bf2)
         assert "std_errors" in result
         assert np.all(np.isfinite(np.asarray(result["std_errors"]["gamma"])))
