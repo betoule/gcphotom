@@ -131,7 +131,12 @@ def simulate_image(
     params["gamma"] = gamma
     params["alpha"] = alpha
 
-    model_shape = max(21, int(6 * gamma))
+    # Enclose 99.99% of the Moffat flux to avoid truncation bias.
+    # moffat_flux(R) = 1 - (1 + R²/γ²)^(1-α) = flux_contained
+    # => (1 + R²/γ²) = (1 - flux_contained)^(1/(1-α))
+    flux_contained = 0.9999
+    R_required = gamma * np.sqrt((1 - flux_contained) ** (1 / (1 - alpha)) - 1)
+    model_shape = max(21, int(2 * R_required) + 1)
     image = make_model_image(
         shape,
         psf,
@@ -142,7 +147,9 @@ def simulate_image(
     )
 
     image = image + background
-    image = apply_poisson_noise(image, seed=seed)
+
+    if background > 0 or read_noise > 0:
+        image = apply_poisson_noise(image, seed=seed)
 
     if read_noise > 0:
         rng = np.random.default_rng(seed)

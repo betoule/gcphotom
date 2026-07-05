@@ -330,8 +330,19 @@ class Fitter:
             "back": self.background_estimate,
         }
 
-    def plot_PSF(self, bf, axes=None):
-        """Plot the median PSF and residuals.
+    def plot_PSF(self, bf, axes=None, gamma_true=None, alpha_true=None):
+        """Plot the median PSF and diagnostics vs aperture radius.
+
+        The top panel shows the fractional annular PSF profile (data vs.
+        best-fit Moffat model). When ``gamma_true`` and ``alpha_true`` are
+        given, the true input profile is also shown as a dashed curve.
+
+        The bottom panel shows either weighted residuals ``(data - model) /
+        sigma`` (when true parameters are *not* provided), or the ratio of
+        best-fit to true model annular flux (when they *are* provided).
+        The latter directly reveals at which radii the fitted profile
+        deviates from the input — a powerful diagnostic for systematics
+        such as pixelization at small radii.
 
         Parameters
         ----------
@@ -339,36 +350,125 @@ class Fitter:
             Best-fit parameters.
         axes : tuple of Axes or None
             ``(ax1, ax2)`` for PSF and residual plots.
+        gamma_true : float, optional
+            True Moffat gamma of the simulation. When given together with
+            *alpha_true*, the bottom panel switches to model-model ratio.
+        alpha_true : float, optional
+            True Moffat alpha of the simulation.
 
         Returns
         -------
         ax1, ax2 : matplotlib Axes
         """
         if axes is None:
-            fig = plt.figure("PSF residuals")
+            fig = plt.figure("PSF weighted residuals")
             ax1, ax2 = fig.subplots(2, 1, sharex=True)
         else:
             ax1, ax2 = axes
 
-        PSF = (self.fluxes - bf["back"] * self.areas[:, None]) / (
-            bf["flux"] * self.estimate
-        )
-        PSF = PSF.at[~self.goods].set(jnp.nan)
+        radii_np = np.asarray(self.radii)
 
-        r = np.array(self.residuals(bf, mask=True) / (bf["flux"] * self.estimate))
+        # --- Top panel: PSF profile ---
+        # Background-subtracted annular flux, normalized by total flux.
+        total_flux = bf["flux"] * self.estimate
+        PSF = (self.fluxes - bf["back"] * self.areas[:, None]) / total_flux
+        PSF = np.asarray(PSF.at[~self.goods].set(jnp.nan))
 
-        ax1.plot(
-            self.radii,
+        psf_med = np.nanmedian(PSF, axis=1)
+        psf_p16 = np.nanpercentile(PSF, 16, axis=1)
+        psf_p84 = np.nanpercentile(PSF, 84, axis=1)
+
+        # Normalised best-fit model
+        model_ann = np.asarray(
             annular_fluxes(
-                self.object_model(
-                    {**bf, "flux": np.array([1.0])},
-                    self.radii,
-                )
-            ),
-            "k-",
+                self.object_model({**bf, "flux": np.array([1.0])}, self.radii)
+            )
+        ).ravel()
+
+        ax1.plot(radii_np, model_ann, "k-", label="Best-fit Moffat", zorder=5)
+        ax1.errorbar(
+            radii_np,
+            psf_med,
+            yerr=[psf_med - psf_p16, psf_p84 - psf_med],
+            fmt="o",
+            color="C0",
+            capsize=2,
+            markersize=4,
+            label="Data (median ± 16th/84th)",
         )
-        ax1.plot(self.radii, np.nanmedian(PSF, axis=1), "o")
-        ax2.plot(self.radii, np.nanmean(r, axis=1), "o")
+
+        use_true = gamma_true is not None and alpha_true is not None
+        if use_true:
+            true_ann = np.asarray(
+                annular_fluxes(
+                    self.object_model(
+                        {
+                            "flux": np.array([1.0]),
+                            "gamma": gamma_true,
+                            "alpha": alpha_true,
+                        },
+                        self.radii,
+                    )
+                )
+            ).ravel()
+            ax1.plot(
+                radii_np, true_ann, "k--", label=f"True Moffat", alpha=0.6, zorder=4
+            )
+
+        ax1.set_ylabel("Fractional annular flux")
+        ax1.legend(loc="upper right", frameon=False)
+        ax1.grid(True, alpha=0.3)
+
+        # --- Bottom panel ---
+        if use_true:
+            # Fractional deviation of best-fit model from the true profile
+            frac_dev = np.where(true_ann > 0, model_ann / true_ann - 1, np.nan)
+
+            # Average fractional residual (data − best_fit) in PSF-normalised
+            # space, divided by the true profile — same units as frac_dev.
+            psf_residual = PSF - model_ann[:, None]  # (n_radii, n_src)
+            avg_resid = np.nanmean(psf_residual, axis=1)
+            n_good = np.sum(~np.isnan(psf_residual), axis=1)
+            sem_resid = np.nanstd(psf_residual, axis=1, ddof=1) / np.sqrt(n_good)
+            resid_over_true = np.where(true_ann > 0, avg_resid / true_ann, np.nan)
+            resid_err = np.where(true_ann > 0, sem_resid / true_ann, np.nan)
+
+            ax2.axhline(0, color="gray", ls="--", alpha=0.5, zorder=0)
+            ax2.plot(radii_np, frac_dev, "k-", label="(Best − True) / True", zorder=5)
+            ax2.errorbar(
+                radii_np,
+                resid_over_true,
+                yerr=resid_err,
+                fmt="s",
+                color="C1",
+                capsize=2,
+                markersize=4,
+                label="⟨(Data − Best) / True⟩ ± SE",
+            )
+            ax2.set_ylabel("Fractional deviation\nfrom true profile")
+        else:
+            # Weighted residuals
+            wr = np.asarray(self.weighted_residuals(bf, mask=True))
+            wr_med = np.nanmedian(wr, axis=1)
+            wr_p16 = np.nanpercentile(wr, 16, axis=1)
+            wr_p84 = np.nanpercentile(wr, 84, axis=1)
+            ax2.axhline(0, color="gray", ls="--", alpha=0.5, zorder=0)
+            ax2.errorbar(
+                radii_np,
+                wr_med,
+                yerr=[wr_med - wr_p16, wr_p84 - wr_med],
+                fmt="o",
+                color="C0",
+                capsize=2,
+                markersize=4,
+                label="Weighted residual (median ± 16th/84th)",
+            )
+            ax2.set_ylabel("Weighted residual\n(data − model) / σ")
+
+        ax2.set_xlabel("Aperture radius [pix]")
+        ax2.legend(loc="upper right", frameon=False)
+        ax2.grid(True, alpha=0.3)
+
         return ax1, ax2
 
     def detect_contamination(self, bf):
