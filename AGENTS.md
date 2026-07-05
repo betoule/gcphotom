@@ -36,6 +36,21 @@
 - Core: `jax`, `jaxlib`, `astropy`, `numpy`
 - GPU support requires appropriate JAX backend installation.
 
+## Example scripts
+
+Example scripts under `examples/` must support interactive use:
+- **Do not** call `matplotlib.use('Agg')` or any non-interactive backend.
+- **Do not** close figures (`plt.close()`, `plt.close('all')`, `plt.clf()`, etc.).
+- Save figures to file before `plt.show()`.
+- End with `plt.show()` (or `plt.show(block=True)`) to display figures in interactive
+  sessions without blocking further commands.
+- If a script can run headless too, guard file-saving behind `plt.show()`:
+  ```python
+  # Save first, then show
+  fig.savefig('output.png', dpi=150)
+  plt.show()
+  ```
+
 ## Behavioral guidelines
 
 1. Think Before Coding
