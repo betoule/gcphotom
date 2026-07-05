@@ -1,137 +1,281 @@
-# GCPhotom Simulation Pipeline Plan
+# Simulation framework
 
-## Goal
-
-Build a test pipeline that simulates a realistic 1024×1024 CCD image with ~1000 stellar sources, extracts aperture growth curves, and fits Moffat profiles — enabling end-to-end validation of `gcphotom`'s growth-curve fitting.
+`gcphotom` provides two levels of simulation: **single-image simulation** for
+quick experimentation, and **Monte Carlo simulation** for statistical bias
+analysis across many random realizations.  This document describes the design,
+data flow, and extension points.
 
 ---
 
-## Architecture
+## 1. Two simulation modes
+
+### 1.1 Single-image simulation (`gcphotom.simulate_image`)
+
+Generates one synthetic astronomical image with known ground truth:
+
+```python
+image, catalog = gcp.simulate_image(
+    shape=(1024, 1024), n_sources=1000,
+    gamma=3.0, alpha=3.0, background=100.0, read_noise=5.0, seed=42,
+)
+```
+
+Returns an `ndarray` image and an `astropy.table.Table` catalog with `x`, `y`,
+`flux` columns.  Sources are placed at random positions with log-uniform
+fluxes in [100, 1e6] ADU.  Each is rendered with a Moffat PSF via
+`photutils.datasets.make_model_image`.  Poisson noise (source + background)
+and Gaussian read noise are added.
+
+The catalog generator (`make_realistic_source_catalog`) and image simulator
+(`simulate_image`) live in `src/gcphotom/simulator.py`.
+
+### 1.2 Monte Carlo simulation (`gcphotom.montecarlo.MonteCarlo`)
+
+Repeats the single-image simulation + photometry pipeline N times with
+independent random catalogs:
+
+```python
+from gcphotom.montecarlo import SimulationConfig, MonteCarlo
+
+cfg = SimulationConfig(n_sources=1000, shape=(1024, 1024), ...)
+mc = MonteCarlo(cfg, n_realizations=100, seed=42)
+results = mc.run()          # -> list[dict]
+```
+
+Each realisation:
+1. Draws a random catalog (sub-seeded from the master seed).
+2. Simulates an image.
+3. Runs `run_pipeline` with the configured estimators.
+4. Collects the result.
+
+Failed realizations are caught, a warning is issued, and the loop continues.
+The number of successful realizations is `len(results)`.
+
+---
+
+## 2. SimulationConfig
+
+A lightweight dataclass that captures all parameters needed for one
+realization:
+
+| Field         | Type    | Default | Description                              |
+|---------------|---------|---------|------------------------------------------|
+| `n_sources`   | `int`   | 1000    | Number of sources per realisation        |
+| `shape`       | `tuple` | 1024²   | Image shape `(ny, nx)`                   |
+| `gamma`       | `float` | 3.0     | Moffat PSF scale parameter (pixels)     |
+| `alpha`       | `float` | 3.0     | Moffat PSF shape parameter               |
+| `background`  | `float` | 100.0   | Constant background level (ADU)          |
+| `read_noise`  | `float` | 5.0     | Gaussian read noise σ (ADU)             |
+| `n_pixels`    | `int`   | 5       | Background mesh for `detect_and_segment` |
+| `fit_kwargs`  | `dict`  | `{lr=1e-2, niter=2000}` | Passed to `Fitter.fit()` |
+
+---
+
+## 3. Estimator API
+
+An **estimator** is a function `(image, detections, cog) -> dict` that
+performs one photometry measurement on a realisation and returns:
+
+```python
+{
+    "best_fit": {           # pytree of fitted parameters (must include "flux")
+        "flux": ndarray,    # per-source, NaN-expanded to det_cat length
+        ...                 # any other parameters (gamma, alpha, back, …)
+    },
+    "uncertainty": {        # same structure as best_fit, 1σ uncertainties
+        "flux": ndarray,    # or None if unavailable
+        ...
+    } | None,
+    "extra": {
+        "estimation_time": float,   # wall-clock seconds (added by @timed_estimator)
+        ...                         # any estimator-specific metadata
+    },
+}
+```
+
+Key rules:
+- **`best_fit["flux"]`** must be a 1-D array with the same length as the
+  detection catalog (sources dropped internally are NaN).
+- **`uncertainty`** is either a pytree matching `best_fit` or `None` (when
+  uncertainties are not available).
+- **`extra["estimation_time"]`** is mandatory — the `@timed_estimator`
+  decorator injects it automatically.
+
+### `@timed_estimator` decorator
+
+```python
+from gcphotom.montecarlo import timed_estimator
+
+@timed_estimator
+def my_estimator(image, detections, cog):
+    # ... compute ...
+    return {"best_fit": ..., "uncertainty": ...}
+    # extra["estimation_time"] is added automatically
+```
+
+The decorator wraps the function, measures wall time with
+`time.perf_counter()`, and inserts `estimation_time` into the returned
+`extra` dict.  If the function already returned an `extra` dict the
+decorated fields are merged.
+
+### `detections` dict
+
+Passed to every estimator, it contains the outputs of
+`detect_and_segment`:
+
+```python
+{
+    "seg": seg,             # segmentation image (ndarray)
+    "det_cat": det_cat,     # detection catalog (Table)
+    "bkg_map": bkg_map,     # background map (ndarray)
+    "bkg_var_map": ...,     # background variance map (ndarray)
+}
+```
+
+**Note:** estimators that need initial-guess quality flags compute them
+internally from `det_cat` (e.g. `(ellipticity * area) > 6`).
+
+---
+
+## 4. Built-in estimators
+
+| Function | Key in `default_estimators()` | Description |
+|----------|-------------------------------|-------------|
+| `gc_estimator` | `"GC"` | Two-step growth-curve fit with free background.  Returns `flux`, `back`, `gamma`, `alpha`, `ngoods`, `chi2` and their standard errors. |
+| `gc_fixed_back_estimator` | `"GC (fixed back)"` | Same but background is fixed to the mean fitted value — isolates the effect of background misestimation on fluxes. |
+| `aperture_estimator` | `"Aperture + AC"` | Aperture photometry with aperture correction derived from the fitted Moffat profile.  `best_fit` contains only `flux`. |
+| `psf_estimator` | `"PSF"` | PSF photometry via `psf_photometry`.  `best_fit` contains only `flux`. |
+
+### `default_estimators(cfg)`
+
+Convenience function that returns the four estimators above with parameters
+pre-bound from a `SimulationConfig`:
+
+```python
+from gcphotom.montecarlo import default_estimators
+
+estimators = default_estimators(cfg)
+# == {
+#     "GC":              partial(gc_estimator, fit_kwargs=cfg.fit_kwargs),
+#     "GC (fixed back)": partial(gc_fixed_back_estimator, fit_kwargs=cfg.fit_kwargs),
+#     "PSF":             partial(psf_estimator, background=cfg.background),
+#     "Aperture + AC":   partial(aperture_estimator, fit_kwargs=cfg.fit_kwargs),
+# }
+```
+
+---
+
+## 5. Pipeline runner
+
+`run_pipeline(image, sim_cat, cfg, estimators)` ties everything together:
+
+1. Runs source detection (`detect_and_segment`).
+2. Extracts growth curves.
+3. Cross-matches the detection catalog to the truth catalog.
+4. Calls each estimator in sequence.
+5. Returns:
+
+```python
+{
+    "sim_cat": <Table>,        # truth catalog matched to det_cat length
+    "det_cat": <Table>,        # detection catalog
+    "params":  <SimulationConfig>,
+    "<name>":  <estimator result dict>,    # one per estimator
+    ...
+}
+```
+
+`sim_cat` is the truth catalog (`cross_match(det_cat, truth)`) so that
+`sim_cat["flux"]` gives the true flux for each detected source (NaN for
+unmatched sources).  This is the reference that `compute_flux_bias` uses.
+
+---
+
+## 6. Compute and plot
+
+### `compute_flux_bias(results, estimators=None, nbins=10)`
+
+Collects `best_fit["flux"]` vs `sim_cat["flux"]` across all realisations,
+masks non-finite entries, concatenates, and computes per-bin median bias:
 
 ```
-src/gcphotom/
-  simulator.py    ← image generation + noise
-  aperture.py     ← growth curve extraction
-
-tests/
-  test_simulator.py   ← image simulation tests
-  test_aperture.py    ← growth curve extraction tests
+bias = (estimate / truth - 1) × 100     (percent)
 ```
 
-### Dependencies
+Returns `{name: {"xbins": ..., "bias": ..., "bias_err": ...}}`.
 
-`photutils>=1.10` is a core dependency (already in `pyproject.toml`).
+When `estimators` is `None`, it auto-detects all estimator keys (every key
+except `"sim_cat"`, `"det_cat"`, `"params"`).
 
----
+### `plot_flux_bias(bias_stats, figsize=(7, 5))`
 
-## Module 1: `simulator.py`
-
-### `make_source_catalog(n_sources=1000, shape=(1024, 1024), margin=20, seed=None)`
-
-Generate a realistic source catalog:
-
-- **Positions**: Uniform random placement in `[margin, shape[1]-margin] × [margin, shape[0]-margin]`. No minimum separation — positions are truly random.
-- **Fluxes**: Log-uniform distribution. Sample `log10(F) ~ Uniform(log10(F_min), log10(F_max))` with `F_min=100`, `F_max=1e6` ADU. This gives a roughly flat distribution in magnitude, realistic for crowded fields.
-- **Return**: `astropy.table.Table` with columns `(x, y, flux)`.
-
-### `simulate_image(shape=(1024, 1024), catalog=None, alpha=3, beta=3, background=100, read_noise=5, seed=None)`
-
-Assemble the final image:
-
-1. **Catalog**: If `catalog` is `None`, generate one via `make_source_catalog(shape=shape, seed=seed)`.
-2. **PSF rendering**: `photutils.datasets.make_model_image(shape, Moffat2D, catalog)` with `discretize_method='oversample'` (factor=10) for accurate subpixel flux. The Moffat2D model is constructed directly with `amplitude = flux * (beta - 1) / (alpha**2 * pi)` to ensure correct total flux.
-3. **Background**: Add constant `background` value to all pixels.
-4. **Poisson noise**: `photutils.datasets.apply_poisson_noise(image, seed=seed)` — models photon shot noise.
-5. **Read noise**: Add `np.random.normal(0, read_noise, shape)` — Gaussian readout noise.
-6. **Return**: `(image, catalog)` tuple. The catalog retains injected truth values.
-
-### Default Parameters
-
-| Parameter | Default | Rationale |
-|-----------|---------|-----------|
-| `alpha` | 3 pix | Typical seeing-limited Moffat core |
-| `beta` | 3 | Realistic wing index |
-| `background` | 100 ADU | Typical sky background |
-| `read_noise` | 5 ADU | Typical CCD read noise |
-| `F_min` | 100 ADU | Faintest detectable source |
-| `F_max` | 1e6 ADU | Brightest (near-saturation) |
+Single-panel plot of flux bias vs simulated flux for all estimators in
+`bias_stats`.  Returns the `Axes` object.
 
 ---
 
-## Module 2: `aperture.py`
+## 7. Save / load
 
-### `extract_growth_curves(image, positions, radii, background_variance=None)`
+Only MC results are persisted (computation of bias from results is fast and
+done on the fly).
 
-Extract circular growth curves for each source position:
+```python
+from gcphotom.montecarlo import save_results, load_results
 
-1. For each `(x, y)` in `positions`:
-   - `photutils.profiles.CurveOfGrowth(image, (x, y), radii, error=sqrt(background_variance))`
-   - Collect `profile` (cumulative flux), `profile_error`, `radius`
-   - `background_var[i] = profile_error**2` (cumulative background variance)
-   2. **Return**: A dict with:
-    ```python
-    {
-        "radius": ndarray,             # shape (n_radii,)
-        "flux": ndarray,               # shape (n_sources, n_radii)
-        "background_var": ndarray,     # shape (n_sources, n_radii)
-        "flux_clean": ndarray,         # shape (n_sources, n_radii)
-        "contamination": ndarray,      # shape (n_sources, n_radii)
-    }
-    ```
-    When no segmentation image is provided, `flux_clean` is identical to
-    `flux` and `contamination` is an array of zeros.
+save_results("my_sim.pkl", results)       # .pkl appended if missing
+loaded = load_results("my_sim.pkl")       # -> list[dict]
+```
 
-### `extract_single_growth_curve(image, position, radii, error=None)`
-
-Convenience wrapper for single-source extraction. Returns `(radius, profile, profile_error)`. The `error` parameter expects a per-pixel 1-sigma map (for compatibility with `photutils.CurveOfGrowth`).
+Uses `pickle.dump` / `pickle.load`.  Loaded results work directly with
+`compute_flux_bias` and `plot_flux_bias`.
 
 ---
 
-## Module 3: Tests
+## 8. Adding a new estimator
 
-### `tests/test_simulator.py`
+1. Write a function with the `(image, detections, cog)` signature.
+2. Decorate it with `@timed_estimator`.
+3. Return `{"best_fit": ..., "uncertainty": ..., "extra": ...}`.
+4. Include a `"flux"` array in `best_fit`, NaN-expanded to `det_cat` length.
+5. Pass it in the estimators dict:
 
-| Test | What it checks |
-|------|----------------|
-| `test_catalog_length` | `make_source_catalog` returns exact number of sources |
-| `test_default_n_sources` | Default `n_sources` is 1000 |
-| `test_positions_within_bounds` | All positions within `[margin, shape-margin]` |
-| `test_flux_range` | Flux values in `[100, 1e6]` |
-| `test_flux_log_uniform_mean` | Mean of `log10(flux)` ≈ `(log10(100) + log10(1e6)) / 2` |
-| `test_image_shape` | `simulate_image` returns correct shape |
-| `test_returns_catalog` | Returned catalog is the same object as input |
-| `test_auto_generate_catalog` | `catalog=None` auto-generates a catalog |
-| `test_no_nan` | Image contains no NaN or Inf values |
-| `test_background_level` | Background region median matches injected value |
-| `test_noise_statistics` | Background region std ≈ `sqrt(background + read_noise²)` |
-| `test_flux_conservation` | Total image flux ≈ sum of injected fluxes (within Poisson tolerance) |
-| `test_full_simulation` | Full pipeline produces correct shape, finite values, no negative pixels |
+```python
+mc = MonteCarlo(cfg, n_realizations=100, estimators={
+    "GC": gc_estimator,
+    "MyNew": my_new_estimator,
+})
+```
 
-### `tests/test_aperture.py`
-
-| Test | What it checks |
-|------|----------------|
-| `test_output_shapes` | Growth curve output arrays have correct shapes |
-| `test_monotonic_increase` | Profile is mostly monotonically increasing (isolated source) |
-| `test_flux_recovery` | Recovered flux at large radius matches injected flux (within tolerance) |
-| `test_with_error` | Error map propagates to profile error |
-| `test_multi_source` | All sources get growth curves extracted with correct shapes |
-| `test_with_background_variance` | Background variance map produces valid cumulative variance |
+No other code changes are needed — `compute_flux_bias` and `plot_flux_bias`
+auto-detect new estimator keys.
 
 ---
 
-## Implementation Order
+## 9. Data flow
 
-1. **`simulator.py`** — `make_source_catalog` → `simulate_image`
-2. **`tests/test_simulator.py`** — Validate each component
-3. **`aperture.py`** — `extract_growth_curves` + helpers
-4. **`tests/test_aperture.py`** — Validate extraction
-
----
-
-## Notes
-
-- The Moffat2D model in astropy uses `gamma` (scale parameter) and `alpha` (shape parameter). Our `alpha` maps to `gamma`, our `beta` maps to `alpha`.
-- `photutils.datasets.make_model_image` handles overlapping sources correctly (fluxes add).
-- No minimum separation constraint on source positions — locations are truly random, allowing natural overlap scenarios for realistic testing.
-- The log-uniform flux distribution produces sources spanning ~4 magnitudes, giving a realistic dynamic range for testing both faint and bright source recovery.
+```
+SimulationConfig
+       │
+       ▼
+MonteCarlo.run()
+       │
+       ├── for each realisation ──┐
+       │   │                      │
+       │   ├── make_realistic_source_catalog()
+       │   ├── simulate_image()
+       │   ├── run_pipeline()
+       │   │    ├── detect_and_segment()          → detections dict
+       │   │    ├── extract_growth_curves()       → cog
+       │   │    ├── cross_match(det_cat, truth)   → sim_cat
+       │   │    └── estimator(img, detections, cog)  → result per estimator
+       │   │                            (×N estimators)
+       │   │
+       │   └── append result dict
+       │
+       └── return list[dict] ──┐
+                               ▼
+                    compute_flux_bias()  →  plot_flux_bias()
+                               │
+                               ▼
+                    save_results() / load_results()  (pickle)
+```
