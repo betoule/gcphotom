@@ -102,7 +102,7 @@ class TestEstimators:
         [
             (gcp.montecarlo.gc_estimator, "fit_kwargs"),
             (gcp.montecarlo.gc_fixed_back_estimator, "fit_kwargs"),
-            (gcp.montecarlo.psf_estimator, "background"),
+            (gcp.montecarlo.psf_estimator, None),
             (gcp.montecarlo.aperture_estimator, None),
         ],
     )

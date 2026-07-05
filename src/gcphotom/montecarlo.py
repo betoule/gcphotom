@@ -111,11 +111,12 @@ def gc_fixed_back_estimator(image, detections, cog, fit_kwargs=None):
     bf, _ = fitter.fit(**fit_kwargs, desc="GC fix back (1)")
     fitter.detect_contamination(bf)
     bf, _ = fitter.fit(**fit_kwargs, compute_uncertainty=True, desc="GC fix back (2)")
-    ref = fitter.results(bf)
-    mean_back = float(np.mean(ref["back"]))
+    rp = fitter.rescale_params(bf)
+    mean_back = float(np.mean(rp["back"]))
+    n_cur = fitter.fluxes.shape[1]
     bf_fixed, _ = fitter.fit(
         **fit_kwargs,
-        fix={"back": np.full(len(ref["back"]), mean_back)},
+        fix={"back": np.full(n_cur, mean_back)},
         compute_uncertainty=True,
         desc="GC fix back (3)",
     )
@@ -193,10 +194,13 @@ def aperture_estimator(image, detections, cog):
 
 
 @timed_estimator
-def psf_estimator(image, detections, cog, background=100.0, nstars=30, fit_shape=11):
+def psf_estimator(image, detections, cog, nstars=30, fit_shape=11):
     """PSF photometry estimator."""
     psf_results, _ = gcp.psf_photometry(
-        image - background, detections["det_cat"], nstars=nstars, fit_shape=fit_shape
+        image - detections["bkg_map"],
+        detections["det_cat"],
+        nstars=nstars,
+        fit_shape=fit_shape,
     )
     return {
         "best_fit": {"flux": np.asarray(psf_results["flux_fit"])},
@@ -216,7 +220,7 @@ def default_estimators(cfg):
     return {
         "GC": partial(gc_estimator, fit_kwargs=cfg.fit_kwargs),
         "GC (fixed back)": partial(gc_fixed_back_estimator, fit_kwargs=cfg.fit_kwargs),
-        "PSF": partial(psf_estimator, background=cfg.background),
+        "PSF": psf_estimator,
         "Aperture + AC": aperture_estimator,
     }
 
@@ -287,8 +291,6 @@ def run_pipeline(image, sim_cat, cfg, estimators):
 class MonteCarlo:
     """Run a set of estimators over multiple independent realizations.
 
-    Each realization draws a new random catalog.
-
     Parameters
     ----------
     config : SimulationConfig
@@ -299,6 +301,10 @@ class MonteCarlo:
         Master random seed.  Each realization draws a sub-seed.
     estimators : dict of str -> callable, optional
         Estimator functions.  Defaults to :func:`default_estimators`.
+    catalog_fn : callable, optional
+        Function ``f(seed) -> Table`` that generates the source catalog for
+        each realization.  Defaults to ``make_realistic_source_catalog``
+        configured with *config.n_sources* and *config.shape*.
     """
 
     def __init__(
@@ -307,11 +313,19 @@ class MonteCarlo:
         n_realizations: int,
         seed: int | None = None,
         estimators: dict | None = None,
+        catalog_fn=None,
     ):
         self.config = config
         self.n_realizations = n_realizations
         self.seed = seed
         self.estimators = estimators or default_estimators(config)
+        if catalog_fn is None:
+            catalog_fn = partial(
+                gcp.make_realistic_source_catalog,
+                n_sources=self.config.n_sources,
+                shape=self.config.shape,
+            )
+        self._catalog_fn = catalog_fn
         self._results: list[dict] = []
 
     @property
@@ -351,11 +365,7 @@ class MonteCarlo:
             ):
                 print(f"  Realization {i + 1}/{self.n_realizations}")
 
-            catalog = gcp.make_realistic_source_catalog(
-                n_sources=self.config.n_sources,
-                shape=self.config.shape,
-                seed=int(sd),
-            )
+            catalog = self._catalog_fn(seed=int(sd))
             image, _ = gcp.simulate_image(
                 shape=self.config.shape,
                 catalog=catalog,
