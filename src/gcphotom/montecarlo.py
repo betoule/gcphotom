@@ -541,6 +541,70 @@ def plot_flux_bias(bias_stats, figsize=(7, 5)):
     return ax
 
 
+def plot_scalar_bias(results, params=("gamma", "alpha"), figsize=None):
+    """Per-realisation estimates of scalar parameters for each estimator.
+
+    One panel per parameter.  Each panel shows per-realisation fitted
+    values as dots, with a horizontal line at the true value from the
+    simulation config.
+
+    Parameters
+    ----------
+    results : list of dict
+        Per-realisation outputs from :class:`MonteCarlo`.
+    params : tuple of str
+        Scalar parameter names to plot.  Defaults to ``("gamma",
+        "alpha")``.
+    figsize : tuple or None
+        Figure size.  Automatically sized if ``None``.
+
+    Returns
+    -------
+    Axes
+    """
+    n = len(params)
+    figsize = figsize or (6, 3 * n)
+    fig, axes = plt.subplots(n, 1, figsize=figsize, sharex=False)
+
+    if n == 1:
+        axes = [axes]
+
+    colors = {
+        "GC": "k",
+        "GC (fixed back)": "r",
+        "PSF": "b",
+        "Aperture + AC": "m",
+    }
+
+    for ax, param in zip(axes, params):
+        true_val = getattr(results[0]["params"], param)
+
+        for idx, name in enumerate(colors):
+            vals = []
+            for r in results:
+                bf = r.get(name, {}).get("best_fit", {})
+                v = bf.get(param)
+                if v is not None and not hasattr(v, "__len__"):
+                    vals.append(float(v))
+
+            if not vals:
+                continue
+
+            x = np.full(len(vals), idx) + np.random.default_rng(42).uniform(
+                -0.15, 0.15, len(vals)
+            )
+            ax.scatter(x, vals, s=8, color=colors[name], alpha=0.5)
+
+        ax.set_xticks(range(len(colors)))
+        ax.set_xticklabels(list(colors.keys()), rotation=20, ha="right", fontsize=8)
+        ax.axhline(true_val, color="gray", ls="--", alpha=0.7)
+        ax.set_ylabel(param)
+        ax.set_title(f"{param} — true = {true_val:.2f}")
+
+    fig.tight_layout()
+    return axes
+
+
 def plot_estimation_times(results, estimators=None, bins=20, figsize=(7, 5)):
     """Histogram of per-realisation estimation time for each estimator.
 
