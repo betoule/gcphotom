@@ -255,6 +255,38 @@ def psf_estimator(image, detections, cog, nstars=30, fit_shape=11):
     }
 
 
+def det_cat_to_table(det_cat):
+    """Extract a lightweight `~astropy.table.Table` from a `SourceCatalog`.
+
+    The full `SourceCatalog` is expensive to serialise (it holds
+    references to the data, segmentation image, cached properties,
+    etc.).  This function copies only the columns typically needed
+    for later analysis into a plain `~astropy.table.Table`.
+
+    Parameters
+    ----------
+    det_cat : `~photutils.segmentation.SourceCatalog`
+        Detection catalog from :func:`~gcphotom.aperture.detect_and_segment`.
+
+    Returns
+    -------
+    `~astropy.table.Table`
+        Table with columns ``x``, ``y``, ``area``, ``ellipticity``,
+        ``kron_flux``.
+    """
+    from astropy.table import Table
+
+    return Table(
+        {
+            "x": np.asarray(det_cat.x_centroid, dtype=float),
+            "y": np.asarray(det_cat.y_centroid, dtype=float),
+            "area": np.asarray(det_cat.area, dtype=float),
+            "ellipticity": np.asarray(det_cat.ellipticity, dtype=float),
+            "kron_flux": np.asarray(det_cat.kron_flux, dtype=float),
+        }
+    )
+
+
 def default_estimators(cfg):
     """Build a dict of default estimators configured from *cfg*.
 
@@ -321,7 +353,7 @@ def run_pipeline(image, sim_cat, cfg, estimators):
 
     result = {
         "sim_cat": input_cat,
-        "det_cat": det_cat,
+        "det_cat": det_cat_to_table(det_cat),
         "params": cfg,
     }
     for name, estimator in estimators.items():
