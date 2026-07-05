@@ -103,28 +103,27 @@ for field in fields:
 
 print("\n--- Saving figures ---")
 
-fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+plt.figure("Simulated images", figsize=(16, 5))
 
 for idx, (field, image, catalog) in enumerate(zip(fields, images, catalogs)):
-    ax = axes[idx]
+    ax = plt.subplot(1, 3, idx + 1)
     vmin, vmax = np.percentile(image, [5, 99.5])
     ax.imshow(image, vmin=vmin, vmax=vmax, origin="lower", cmap="gray")
     ax.set_title(f"{field['label']}\n{len(catalog)} sources")
     ax.set_xlabel("x [pix]")
     ax.set_ylabel("y [pix]")
 
-fig.suptitle("Simulated images — 1″/pixel, ZP=25, G<20", fontsize=13)
-fig.tight_layout()
-fig.savefig("gaia_images_comparison.png", dpi=150)
+plt.suptitle("Simulated images — 1″/pixel, ZP=25, G<20", fontsize=13)
+plt.tight_layout()
+plt.savefig("gaia_images_comparison.png", dpi=150)
 print("  Saved gaia_images_comparison.png")
-plt.close(fig)
 
 # --- Figure 2: flux reconstruction errors ----------------------------------
 
-fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharey=True)
+plt.figure("Flux errors", figsize=(16, 5))
 
 for idx, (field, result) in enumerate(zip(fields, results)):
-    ax = axes[idx]
+    ax = plt.subplot(1, 3, idx + 1)
 
     for name in estimators:
         flux_truth = np.asarray(result["sim_cat"]["flux"])
@@ -152,10 +151,9 @@ for idx, (field, result) in enumerate(zip(fields, results)):
         ax.set_ylabel("Flux error [%]")
         ax.legend(loc="best", frameon=False)
 
-fig.suptitle("Flux reconstruction error — median bias per flux bin", fontsize=13)
-fig.tight_layout()
-fig.savefig("gaia_flux_error_comparison.png", dpi=150)
+plt.suptitle("Flux reconstruction error — median bias per flux bin", fontsize=13)
+plt.tight_layout()
+plt.savefig("gaia_flux_error_comparison.png", dpi=150)
 print("  Saved gaia_flux_error_comparison.png")
-plt.close(fig)
 
 print("\nDone.")
