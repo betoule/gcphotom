@@ -1,7 +1,7 @@
 """Gaia-based simulated image and flux reconstruction.
 
-Queries Gaia DR3 for sources in a given sky footprint, simulates an
-image, and compares flux reconstruction across three estimators.
+Compares three fields at different stellar densities (COSMOS, Boötes,
+Cygnus) to illustrate photometric performance in different conditions.
 """
 
 from functools import partial
@@ -13,28 +13,10 @@ from astropy.wcs import WCS
 import gcphotom as gcp
 from gcphotom.plots import binplot
 
-# --- Sky footprint ----------------------------------------------------------
-
-# Simple tangent-plane WCS centred on (RA, Dec) = (76.377, 52.831)
-# with ~1 arcsec/pixel sampling (0.00028 deg/pixel).
-wcs = WCS(naxis=2)
-wcs.wcs.crpix = [512.0, 512.0]
-wcs.wcs.cdelt = [-0.00028, 0.00028]
-wcs.wcs.crval = [76.377, 52.831]
-wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+# --- Simulation parameters -------------------------------------------------
 
 shape = (1024, 1024)
 zeropoint = 25.0  # G=25 -> 1 ADU
-
-# --- Gaia source catalog ---------------------------------------------------
-
-print("Querying Gaia DR3 ...")
-catalog = gcp.make_gaia_source_catalog(
-    wcs, shape, zeropoint, g_max=20.0, margin_arcmin=5.0
-)
-print(f"  {len(catalog)} sources in the field")
-
-# --- Simulate image --------------------------------------------------------
 
 cfg = gcp.montecarlo.SimulationConfig(
     shape=shape,
@@ -43,67 +25,137 @@ cfg = gcp.montecarlo.SimulationConfig(
     background=100.0,
     read_noise=5.0,
     n_pixels=5,
-    fit_kwargs={"learning_rate": 1e-2, "niter": 2000},
+    fit_kwargs={"learning_rate": 1e-2, "niter": 400},
 )
-
-image, truth = gcp.simulate_image(
-    shape=shape,
-    catalog=catalog,
-    gamma=cfg.gamma,
-    alpha=cfg.alpha,
-    background=cfg.background,
-    read_noise=cfg.read_noise,
-    seed=42,
-)
-
-# --- Display the image -----------------------------------------------------
-
-fig, ax = plt.subplots(figsize=(8, 8))
-vmin, vmax = np.percentile(image, [5, 99.5])
-ax.imshow(image, vmin=vmin, vmax=vmax, origin="lower", cmap="gray")
-ax.set_title(f"Simulated image — {len(catalog)} Gaia sources")
-fig.tight_layout()
-plt.savefig("gaia_simulated_image.png", dpi=150)
-print("Saved gaia_simulated_image.png")
-
-# --- Run pipeline -----------------------------------------------------------
 
 estimators = {
     "GC": partial(gcp.montecarlo.gc_estimator, fit_kwargs=cfg.fit_kwargs),
     "PSF": gcp.montecarlo.psf_estimator,
     "Aperture + AC": gcp.montecarlo.aperture_estimator,
 }
-
-result = gcp.montecarlo.run_pipeline(image, catalog, cfg, estimators)
-
-# --- Flux reconstruction errors -------------------------------------------
-
-fig, ax = plt.subplots(figsize=(8, 5))
-
 colors = {"GC": "k", "PSF": "b", "Aperture + AC": "m"}
 
-for name in estimators:
-    flux_truth = np.asarray(result["sim_cat"]["flux"])
-    flux_est = np.asarray(result[name]["best_fit"]["flux"])
-    valid = np.isfinite(flux_truth) & np.isfinite(flux_est) & (flux_truth > 0)
-    error = (flux_est[valid] / flux_truth[valid] - 1.0) * 100.0
+# --- Three pointings -------------------------------------------------------
 
-    xb, yb, yerr = binplot(
-        flux_truth[valid],
-        error,
-        nbins=10,
-        logbins=True,
-        method="median",
-        noplot=True,
+fields = [
+    {
+        "label": "COSMOS",
+        "ra": 150.0,
+        "dec": 2.2,
+        "comment": "b ≈ +42°",
+    },
+    {
+        "label": "Boötes",
+        "ra": 233.0,
+        "dec": 50.0,
+        "comment": "b ≈ +55°",
+    },
+    {
+        "label": "Cygnus",
+        "ra": 300.0,
+        "dec": 40.0,
+        "comment": "Galactic plane, b ≈ 0°",
+    },
+]
+
+# --- Process each field ----------------------------------------------------
+
+images = []
+catalogs = []
+results = []
+
+for field in fields:
+    print(f"\n{'='*60}")
+    print(f"{field['label']}  ({field['comment']})")
+    print(f"{'='*60}")
+
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = [shape[1] / 2.0, shape[0] / 2.0]
+    wcs.wcs.cdelt = [-0.00028, 0.00028]
+    wcs.wcs.crval = [field["ra"], field["dec"]]
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+
+    print("  Querying Gaia DR3 ...")
+    catalog = gcp.make_gaia_source_catalog(
+        wcs, shape, zeropoint, g_max=20.0, margin_arcmin=5.0
     )
-    ax.errorbar(xb, yb, yerr=yerr, fmt="o", color=colors[name], label=name, zorder=5)
+    print(f"  {len(catalog)} sources")
 
-ax.axhline(0, color="gray", ls="--", alpha=0.5)
-ax.set_xlabel("Simulated flux [ADU]")
-ax.set_xscale("log")
-ax.set_ylabel("Flux error [%]")
-ax.legend(loc="best", frameon=False)
+    print("  Simulating image ...")
+    image, _ = gcp.simulate_image(
+        shape=shape,
+        catalog=catalog,
+        gamma=cfg.gamma,
+        alpha=cfg.alpha,
+        background=cfg.background,
+        read_noise=cfg.read_noise,
+        seed=42,
+    )
+    images.append(image)
+    catalogs.append(catalog)
+
+    print("  Running pipeline ...")
+    result = gcp.montecarlo.run_pipeline(image, catalog, cfg, estimators)
+    results.append(result)
+
+
+# --- Figure 1: simulated images -------------------------------------------
+
+print("\n--- Saving figures ---")
+
+fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+for idx, (field, image, catalog) in enumerate(zip(fields, images, catalogs)):
+    ax = axes[idx]
+    vmin, vmax = np.percentile(image, [5, 99.5])
+    ax.imshow(image, vmin=vmin, vmax=vmax, origin="lower", cmap="gray")
+    ax.set_title(f"{field['label']}\n{len(catalog)} sources")
+    ax.set_xlabel("x [pix]")
+    ax.set_ylabel("y [pix]")
+
+fig.suptitle("Simulated images — 1″/pixel, ZP=25, G<20", fontsize=13)
 fig.tight_layout()
-plt.savefig("gaia_flux_error.png", dpi=150)
-print("Saved gaia_flux_error.png")
-plt.show()
+fig.savefig("gaia_images_comparison.png", dpi=150)
+print("  Saved gaia_images_comparison.png")
+plt.close(fig)
+
+# --- Figure 2: flux reconstruction errors ----------------------------------
+
+fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharey=True)
+
+for idx, (field, result) in enumerate(zip(fields, results)):
+    ax = axes[idx]
+
+    for name in estimators:
+        flux_truth = np.asarray(result["sim_cat"]["flux"])
+        flux_est = np.asarray(result[name]["best_fit"]["flux"])
+        valid = np.isfinite(flux_truth) & np.isfinite(flux_est) & (flux_truth > 0)
+        error = (flux_est[valid] / flux_truth[valid] - 1.0) * 100.0
+
+        xb, yb, yerr = binplot(
+            flux_truth[valid],
+            error,
+            nbins=10,
+            logbins=True,
+            method="median",
+            noplot=True,
+        )
+        ax.errorbar(
+            xb, yb, yerr=yerr, fmt="o", color=colors[name], label=name, zorder=5
+        )
+
+    ax.axhline(0, color="gray", ls="--", alpha=0.5)
+    ax.set_xlabel("Simulated flux [ADU]")
+    ax.set_xscale("log")
+    ax.set_title(f"{field['label']}  ({len(catalogs[idx])} sources)")
+    if idx == 0:
+        ax.set_ylabel("Flux error [%]")
+        ax.legend(loc="best", frameon=False)
+
+fig.suptitle("Flux reconstruction error — median bias per flux bin", fontsize=13)
+fig.tight_layout()
+fig.savefig("gaia_flux_error_comparison.png", dpi=150)
+print("  Saved gaia_flux_error_comparison.png")
+plt.close(fig)
+
+print("\nDone.")

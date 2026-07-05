@@ -68,7 +68,7 @@ def make_gaia_source_catalog(
         ra_max=ra_max,
         dec_min=dec_min,
         dec_max=dec_max,
-        product="bright_sources",
+        product="source",
     )
 
     mag = sources["phot_g_mean_mag"]
