@@ -9,6 +9,14 @@ Chromatic and sensor effects are ignored for this first demonstration.
 
 import time
 import numpy as np
+import matplotlib
+
+for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
+    try:
+        matplotlib.use(_backend, force=True)
+        break
+    except (ImportError, ValueError):
+        continue
 import matplotlib.pyplot as plt
 from astropy.wcs import WCS
 

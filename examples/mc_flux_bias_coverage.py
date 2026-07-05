@@ -4,6 +4,14 @@ Runs ~100 realizations with random catalogs and produces a single
 plot of flux bias vs simulated flux for several photometry methods.
 """
 
+import matplotlib
+
+for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
+    try:
+        matplotlib.use(_backend, force=True)
+        break
+    except (ImportError, ValueError):
+        continue
 import matplotlib.pyplot as plt
 
 import gcphotom as gcp

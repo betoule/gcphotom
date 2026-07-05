@@ -7,6 +7,14 @@ aperture contamination from undetected sources and PSF tails.
 
 import time
 
+import matplotlib
+
+for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
+    try:
+        matplotlib.use(_backend, force=True)
+        break
+    except (ImportError, ValueError):
+        continue
 import matplotlib.pyplot as plt
 import numpy as np
 

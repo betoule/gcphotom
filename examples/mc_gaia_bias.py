@@ -6,6 +6,14 @@ Cygnus) to illustrate photometric performance in different conditions.
 
 from functools import partial
 
+import matplotlib
+
+for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
+    try:
+        matplotlib.use(_backend, force=True)
+        break
+    except (ImportError, ValueError):
+        continue
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.wcs import WCS

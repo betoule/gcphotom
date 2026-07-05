@@ -7,13 +7,14 @@ Plots per-source flux reconstruction error for both methods side by side.
 
 import time
 import numpy as np
-
-# Use Agg backend by default for headless friendliness.
-# Override with MPLBACKEND environment variable for interactive use:
-#   MPLBACKEND=TkAgg uv run python examples/...
 import matplotlib
 
-matplotlib.use("Agg")
+for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
+    try:
+        matplotlib.use(_backend, force=True)
+        break
+    except (ImportError, ValueError):
+        continue
 import matplotlib.pyplot as plt
 from astropy.wcs import WCS
 from functools import partial

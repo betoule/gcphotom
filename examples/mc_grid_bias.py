@@ -4,6 +4,14 @@ Uses make_test_source_catalog to place sources on a regular grid, so every
 realisation sees the same source positions and fluxes — only the noise varies.
 """
 
+import matplotlib
+
+for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
+    try:
+        matplotlib.use(_backend, force=True)
+        break
+    except (ImportError, ValueError):
+        continue
 import matplotlib.pyplot as plt
 
 import gcphotom as gcp

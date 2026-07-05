@@ -43,15 +43,19 @@ Example scripts under `examples/` must support interactive use:
 - Save figures to file before `plt.show()`.
 - End with `plt.show()` (or `plt.show(block=True)`) to display figures in interactive
   sessions without blocking further commands.
-- Use `matplotlib.use("Agg")` for headless friendliness, but allow override via
-  the ``MPLBACKEND`` environment variable so interactive users can select their
-  preferred backend:
+- Use a try-interactive-then-fallback pattern so scripts work both headless
+  and interactively without requiring ``MPLBACKEND``:
   ```python
   import matplotlib
-  matplotlib.use("Agg")
+  for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
+      try:
+          matplotlib.use(_backend, force=True)
+          break
+      except (ImportError, ValueError):
+          continue
   import matplotlib.pyplot as plt
   ```
-  Users run interactively with: ``MPLBACKEND=TkAgg uv run python examples/...``
+  This tries Qt first, then Tk, then falls back to Agg if neither is available.
 
 ## Behavioral guidelines
 
