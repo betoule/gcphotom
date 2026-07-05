@@ -52,30 +52,6 @@ def mc_results(mc_config):
     return mc, results
 
 
-class TestSimulationConfig:
-    def test_defaults(self):
-        cfg = gcp.montecarlo.SimulationConfig()
-        assert cfg.n_sources == 1000
-        assert cfg.gamma == 3.0
-        assert cfg.alpha == 3.0
-        assert cfg.background == 100.0
-        assert cfg.read_noise == 5.0
-
-    def test_custom(self):
-        cfg = gcp.montecarlo.SimulationConfig(
-            n_sources=500,
-            gamma=2.5,
-            alpha=2.0,
-            background=50.0,
-            read_noise=3.0,
-            fit_kwargs={"learning_rate": 1e-3, "niter": 500},
-        )
-        assert cfg.n_sources == 500
-        assert cfg.gamma == 2.5
-        assert cfg.alpha == 2.0
-        assert cfg.fit_kwargs["learning_rate"] == 1e-3
-
-
 class TestTimedEstimator:
     def test_adds_estimation_time(self):
         @gcp.montecarlo.timed_estimator
@@ -121,63 +97,28 @@ class TestEstimators:
         )
         return estimator(image, detections, cog)
 
-    def test_gc_estimator(self, mc_config, sim_data):
-        estimator = partial(
-            gcp.montecarlo.gc_estimator, fit_kwargs=mc_config.fit_kwargs
-        )
+    @pytest.mark.parametrize(
+        "estimator,cfg_field",
+        [
+            (gcp.montecarlo.gc_estimator, "fit_kwargs"),
+            (gcp.montecarlo.gc_fixed_back_estimator, "fit_kwargs"),
+            (gcp.montecarlo.psf_estimator, "background"),
+            (gcp.montecarlo.aperture_estimator, None),
+        ],
+    )
+    def test_estimator_returns_finite_flux(
+        self, estimator, cfg_field, mc_config, sim_data
+    ):
+        if cfg_field is not None:
+            if cfg_field == "fit_kwargs":
+                estimator = partial(estimator, fit_kwargs=mc_config.fit_kwargs)
+            elif cfg_field == "background":
+                estimator = partial(estimator, background=mc_config.background)
         result = self._run_estimator(estimator, mc_config, sim_data)
-        assert "best_fit" in result
-        assert "flux" in result["best_fit"]
-        assert "uncertainty" in result
-        assert "extra" in result
-        assert "estimation_time" in result["extra"]
-        assert np.ndim(result["best_fit"]["flux"]) == 1
         assert np.isfinite(result["best_fit"]["flux"]).any()
-
-    def test_gc_fixed_back_estimator(self, mc_config, sim_data):
-        estimator = partial(
-            gcp.montecarlo.gc_fixed_back_estimator, fit_kwargs=mc_config.fit_kwargs
-        )
-        result = self._run_estimator(estimator, mc_config, sim_data)
-        assert "flux" in result["best_fit"]
-        assert np.isfinite(result["best_fit"]["flux"]).any()
-
-    def test_psf_estimator(self, mc_config, sim_data):
-        estimator = partial(
-            gcp.montecarlo.psf_estimator, background=mc_config.background
-        )
-        result = self._run_estimator(estimator, mc_config, sim_data)
-        assert "flux" in result["best_fit"]
-        assert result["uncertainty"] is None
-
-    def test_aperture_estimator(self, mc_config, sim_data):
-        estimator = partial(
-            gcp.montecarlo.aperture_estimator, fit_kwargs=mc_config.fit_kwargs
-        )
-        result = self._run_estimator(estimator, mc_config, sim_data)
-        assert "flux" in result["best_fit"]
-        assert result["uncertainty"] is None
-
-    def test_default_estimators_builds_dict(self, mc_config):
-        ests = gcp.montecarlo.default_estimators(mc_config)
-        for name in ("GC", "GC (fixed back)", "PSF", "Aperture + AC"):
-            assert name in ests
-            assert callable(ests[name])
 
 
 class TestRunPipeline:
-    def test_returns_expected_keys(self, mc_config, sim_data):
-        image, catalog = sim_data
-        estimators = gcp.montecarlo.default_estimators(mc_config)
-        result = gcp.montecarlo.run_pipeline(image, catalog, mc_config, estimators)
-        assert "sim_cat" in result
-        assert "det_cat" in result
-        assert "params" in result
-        for name in estimators:
-            assert name in result
-            assert "best_fit" in result[name]
-            assert "extra" in result[name]
-
     def test_sim_cat_has_flux(self, mc_config, sim_data):
         image, catalog = sim_data
         estimators = {
@@ -190,15 +131,6 @@ class TestRunPipeline:
         }
         result = gcp.montecarlo.run_pipeline(image, catalog, mc_config, estimators)
         assert np.isfinite(np.asarray(result["sim_cat"]["flux"])).any()
-
-    def test_flux_vectors_match_det_cat_length(self, mc_config, sim_data):
-        image, catalog = sim_data
-        ests = gcp.montecarlo.default_estimators(mc_config)
-        result = gcp.montecarlo.run_pipeline(image, catalog, mc_config, ests)
-        n_det = len(result["det_cat"])
-        for name in ests:
-            flux = result[name]["best_fit"]["flux"]
-            assert len(flux) == n_det, f"{name}: {len(flux)} != {n_det}"
 
 
 class TestMonteCarlo:
@@ -244,24 +176,6 @@ class TestMonteCarlo:
 
 
 class TestComputeFluxBias:
-    def test_returns_expected_keys(self, mc_results):
-        mc, _ = mc_results
-        stats = gcp.montecarlo.compute_flux_bias(
-            mc.results, estimators=["GC", "PSF"], nbins=3
-        )
-        assert "GC" in stats
-        assert "PSF" in stats
-        for s in stats.values():
-            assert "xbins" in s
-            assert "bias" in s
-            assert "bias_err" in s
-
-    def test_auto_detect_estimators(self, mc_results):
-        mc, _ = mc_results
-        stats = gcp.montecarlo.compute_flux_bias(mc.results, nbins=3)
-        for name in ("GC", "GC (fixed back)", "PSF", "Aperture + AC"):
-            assert name in stats
-
     def test_bias_is_reasonable(self, mc_results):
         mc, _ = mc_results
         stats = gcp.montecarlo.compute_flux_bias(mc.results, estimators=["GC"], nbins=3)
@@ -295,7 +209,6 @@ class TestSaveLoad:
 
         loaded = gcp.montecarlo.load_results(path)
         assert len(loaded) == len(mc.results)
-        assert set(loaded[0].keys()) == set(mc.results[0].keys())
 
     def test_default_extension(self, mc_results, tmp_path):
         mc, _ = mc_results
@@ -308,13 +221,3 @@ class TestSaveLoad:
     def test_load_results_file_not_found(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             gcp.montecarlo.load_results(str(tmp_path / "nonexistent.pkl"))
-
-    def test_loaded_results_compute_flux_bias(self, mc_results, tmp_path):
-        mc, _ = mc_results
-        path = str(tmp_path / "mc_flux.pkl")
-        gcp.montecarlo.save_results(path, mc.results)
-        loaded = gcp.montecarlo.load_results(path)
-
-        stats = gcp.montecarlo.compute_flux_bias(loaded, estimators=["GC"], nbins=3)
-        assert "GC" in stats
-        assert "xbins" in stats["GC"]

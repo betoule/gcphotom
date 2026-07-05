@@ -127,33 +127,67 @@ def gc_fixed_back_estimator(image, detections, cog, fit_kwargs=None):
 
 
 @timed_estimator
-def aperture_estimator(image, detections, cog, fit_kwargs=None):
-    """Aperture photometry with aperture correction derived from the
-    fitted Moffat profile."""
-    fit_kwargs = fit_kwargs or {}
-    fitter = gcp.Fitter(cog, bads=_bads(detections["det_cat"]))
-    bf, _ = fitter.fit(**fit_kwargs, desc="AC prep (1)")
-    fitter.detect_contamination(bf)
-    bf, _ = fitter.fit(**fit_kwargs, compute_uncertainty=True, desc="AC prep (2)")
-    fitted = fitter.results(bf)
+def aperture_estimator(image, detections, cog):
+    """Aperture photometry with aperture correction from bright isolated stars.
 
-    fwhm = gcp.gcmodel.gamma2fwhm(fitted["gamma"], fitted["alpha"])
-    r_core_idx = np.argmin(np.abs(cog["radius"] - fwhm))
-    r_corr_idx = np.argmin(np.abs(cog["radius"] - 3 * fwhm))
-    r_core = cog["radius"][r_core_idx]
-    r_corr = cog["radius"][r_corr_idx]
-    ac = gcp.gcmodel.moffat_flux(
-        r_corr, fitted["gamma"], fitted["alpha"]
-    ) / gcp.gcmodel.moffat_flux(r_core, fitted["gamma"], fitted["alpha"])
-    bkg = fitted["back"][fitter.kept]
-    flux_ap = (
-        cog["flux_clean"][:, r_core_idx][fitter.kept] - bkg * np.pi * r_core**2
-    ) * ac
-    flux_ap_full = np.full(len(detections["det_cat"]), np.nan)
-    flux_ap_full[fitter.kept] = flux_ap
+    The aperture correction factor is computed as the median of the ratio
+    of large-aperture flux to small-aperture flux measured on bright,
+    isolated sources.  This avoids any reliance on a growth-curve PSF fit.
+    """
+    radii = np.asarray(cog["radius"])
+    n_radii = len(radii)
+
+    r_small_idx = min(2, n_radii - 2)
+    r_small = radii[r_small_idx]
+    r_large = radii[-1]
+
+    bkg_map = detections["bkg_map"]
+    det_cat = detections["det_cat"]
+    x = np.clip(
+        np.round(np.asarray(det_cat.x_centroid)).astype(int), 0, bkg_map.shape[1] - 1
+    )
+    y = np.clip(
+        np.round(np.asarray(det_cat.y_centroid)).astype(int), 0, bkg_map.shape[0] - 1
+    )
+    bkg_local = np.asarray(bkg_map[y, x], dtype=float)
+
+    flux_small = cog["flux_clean"][:, r_small_idx] - bkg_local * np.pi * r_small**2
+    flux_large = cog["flux_clean"][:, -1] - bkg_local * np.pi * r_large**2
+
+    contam_frac = np.where(
+        cog["flux"][:, -1] > 0,
+        cog["contamination"][:, -1] / cog["flux"][:, -1],
+        0.0,
+    )
+
+    flux_threshold = np.nanmedian(flux_large)
+    bright = flux_large > flux_threshold
+    isolated = contam_frac < 0.1
+
+    good = (
+        bright
+        & isolated
+        & np.isfinite(flux_small)
+        & np.isfinite(flux_large)
+        & (flux_small > 0)
+        & (flux_large > 0)
+    )
+
+    if good.sum() < 3:
+        good = (
+            np.isfinite(flux_small)
+            & np.isfinite(flux_large)
+            & (flux_small > 0)
+            & (flux_large > 0)
+        )
+
+    ratios = flux_large[good] / flux_small[good]
+    ac = np.median(ratios)
+
+    flux_ap = flux_small * ac
 
     return {
-        "best_fit": {"flux": flux_ap_full},
+        "best_fit": {"flux": flux_ap},
         "uncertainty": None,
     }
 
@@ -183,7 +217,7 @@ def default_estimators(cfg):
         "GC": partial(gc_estimator, fit_kwargs=cfg.fit_kwargs),
         "GC (fixed back)": partial(gc_fixed_back_estimator, fit_kwargs=cfg.fit_kwargs),
         "PSF": partial(psf_estimator, background=cfg.background),
-        "Aperture + AC": partial(aperture_estimator, fit_kwargs=cfg.fit_kwargs),
+        "Aperture + AC": aperture_estimator,
     }
 
 

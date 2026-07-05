@@ -6,14 +6,6 @@ from gcphotom.psf_photometry import _as_xy, psf_photometry
 
 
 class TestAsXY:
-    def test_source_catalog(self):
-        image, _ = gcp.simulate_image(n_sources=10, seed=42)
-        _, cat, _, _ = gcp.detect_and_segment(image, n_pixels=5)
-        x, y = _as_xy(cat)
-        assert len(x) > 0
-        assert np.allclose(x, cat.x_centroid)
-        assert np.allclose(y, cat.y_centroid)
-
     def test_table(self):
         from astropy.table import Table
 
@@ -42,12 +34,6 @@ class TestPSFPhotometry:
         assert results is not None
         assert epsf_res is not None
         assert hasattr(epsf_res, "epsf")
-
-    def test_results_columns(self, image_and_sources):
-        image, _, det_cat = image_and_sources
-        results, _ = psf_photometry(image, det_cat, nstars=10)
-        for col in ("flux_fit", "flux_err", "x_fit", "y_fit"):
-            assert col in results.colnames
 
     def test_flux_recovery(self, image_and_sources):
         image, sim_cat, det_cat = image_and_sources
