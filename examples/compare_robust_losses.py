@@ -179,7 +179,7 @@ ax2.set_title("PSF parameter bias")
 plt.tight_layout()
 plt.savefig("robust_loss_comparison.png", dpi=150)
 print("saved robust_loss_comparison.png")
-# plt.close()
+plt.show()
 
 # 7. Print summary table
 print("\n--- Summary ---")

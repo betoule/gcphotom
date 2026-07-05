@@ -131,6 +131,7 @@ plt.ylim(-2, 2)
 plt.axhline(0, color="k")
 plt.legend(loc="best", frameon=False)
 plt.savefig("reconstruction_quality.png")
+plt.show()
 
 # plt.figure('Simulated image')
 # plt.imshow(image, norm='symlog')

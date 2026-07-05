@@ -155,5 +155,6 @@ plt.suptitle("Flux reconstruction error — median bias per flux bin", fontsize=
 plt.tight_layout()
 plt.savefig("gaia_flux_error_comparison.png", dpi=150)
 print("  Saved gaia_flux_error_comparison.png")
+plt.show()
 
 print("\nDone.")

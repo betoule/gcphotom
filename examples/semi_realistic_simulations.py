@@ -228,6 +228,7 @@ plt.axhline(0, color="k")
 plt.legend(loc="best", frameon=False)
 plt.savefig("semi_realistic_reconstruction.png")
 print("Saved semi_realistic_reconstruction.png")
+plt.show()
 
 
 # ------------------------------------------------------------------

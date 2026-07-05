@@ -9,9 +9,6 @@ Chromatic and sensor effects are ignored for this first demonstration.
 
 import time
 import numpy as np
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from astropy.wcs import WCS
 
@@ -245,4 +242,5 @@ plt.tight_layout()
 plt.savefig("galsim_gaia_diff.png", dpi=150)
 print(f"  Saved galsim_gaia_diff.png")
 
+plt.show()
 print(f"\nDone.")
