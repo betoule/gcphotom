@@ -541,6 +541,57 @@ def plot_flux_bias(bias_stats, figsize=(7, 5)):
     return ax
 
 
+def plot_estimation_times(results, estimators=None, bins=20, figsize=(7, 5)):
+    """Histogram of per-realisation estimation time for each estimator.
+
+    Parameters
+    ----------
+    results : list of dict
+        Per-realisation outputs from :class:`MonteCarlo`.
+    estimators : list of str, optional
+        Estimator names to include.  Defaults to all estimator keys
+        found in the results.
+    bins : int
+        Number of histogram bins.
+    figsize : tuple
+        Figure size.
+
+    Returns
+    -------
+    Axes
+    """
+    if estimators is None:
+        estimators = [
+            k for k in results[0] if k not in ("sim_cat", "det_cat", "params")
+        ]
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    colors = {
+        "GC": "k",
+        "GC (fixed back)": "r",
+        "PSF": "b",
+        "Aperture + AC": "m",
+    }
+
+    for name in estimators:
+        times = [
+            r[name]["extra"]["estimation_time"]
+            for r in results
+            if name in r and "extra" in r[name]
+        ]
+        if not times:
+            continue
+        color = colors.get(name, "k")
+        ax.hist(times, bins=bins, alpha=0.5, color=color, label=name)
+
+    ax.set_xlabel("Estimation time [s]")
+    ax.set_ylabel("Number of realisations")
+    ax.legend(loc="best", frameon=False)
+    fig.tight_layout()
+    return ax
+
+
 # ---------------------------------------------------------------------------
 # Save / load
 # ---------------------------------------------------------------------------
