@@ -327,5 +327,201 @@ MonteCarlo.run()
                     plot_scalar_bias()   →  plot_estimation_times()
                                │
                                ▼
-                    save_results() / load_results()  (pickle)
+                     save_results() / load_results()  (pickle)
 ```
+
+---
+
+## 10. GalSim integration study
+
+[GalSim](https://github.com/GalSim-developers/GalSim) (Rowe et al. 2015, A&C,
+10, 121) is the standard open-source library for simulating astronomical images.
+This section documents its capabilities relevant to growth-curve photometry
+simulations, based on GalSim v2.8.4.
+
+### 10.1 PSF profiles
+
+GalSim provides these PSF profile classes (all in `galsim.*`, all subclasses of
+`GSObject`):
+
+| Class | Description |
+|-------|-------------|
+| `Gaussian(sigma/fwhm/hlr)` | 2D Gaussian |
+| `Moffat(beta, scale_radius/fwhm/hlr, trunc)` | Moffat profile with optional truncation radius |
+| `Kolmogorov(lam_over_r0/fwhm/hlr)` | Long-exposure atmospheric PSF (pure Kolmogorov turbulence) |
+| `VonKarman(lam, r0/r0_500, L0)` | von Karman model with outer scale L0 (~10–100 m); has a delta-function component at origin |
+| `Airy(lam_over_diam, lam, diam, obscuration)` | Diffraction-limited PSF for circular aperture |
+| `OpticalPSF(lam_over_diam, aberrations, ...)` | Aberrated PSF via Zernike polynomials (Noll/annular), obscuration, struts, custom pupil image |
+| `PhaseScreenPSF` | PSF from atmospheric + optical phase screens; time-evolving; the most physically realistic model |
+| `InterpolatedImage(image, ...)` | Arbitrary PSF from a data image (e.g., observed star stamp) |
+
+**Relevance:** Our current simulations use only Moffat PSF. GalSim makes it
+trivial to compare Moffat, Kolmogorov, von Karman, aberrated optical, and
+data-driven PSFs within the same framework.
+
+### 10.2 PSF tails at large radius
+
+GalSim draws profiles via three methods, each with different tail behaviour:
+
+| Method | Behaviour | Tail handling |
+|--------|-----------|---------------|
+| `'auto'` | FFT for most profiles, `'real_space'` for hard-edged ones | FFT: analytic k-space, folding controlled by `folding_threshold` |
+| `'fft'` | Convolve with pixel via DFT; multiply in k-space, FFT back | **Folding concern**: periodic boundaries cause aliasing. Mitigate with `folding_threshold=1e-6` and `maximum_fft_size` up to 8192+ |
+| `'real_space'` | Direct Gauss–Kronrod–Patterson integration over pixel area | Accurate for truncated profiles; slower; limited to 2-component convolutions |
+| `'phot'` | Photon shooting: profile sampled as PDF, photons binned | Naturally handles infinite tails; needs sufficient `n_photons`; not available for deconvolutions |
+
+**Accuracy controls** (`GSParams`):
+
+```python
+gsp = galsim.GSParams(
+    folding_threshold=1e-6,     # default 0.005; lower = less PSF wing aliasing
+    stepk_minimum_hlr=5,        # stepk ≤ π / (5 × half-light-radius)
+    maxk_threshold=1e-3,        # high-k cutoff for ringing control
+    maximum_fft_size=8192,      # raise for larger images
+)
+```
+
+**Implication for growth-curve photometry:** The default FFT method can
+alias ~0.5% of PSF flux into the wings. For bias studies at the 0.1% level,
+use `folding_threshold=1e-6` or render with `'real_space'` for analytic
+profiles.  Profiles with `is_analytic_x = True` (Gaussian, Moffat, Sersic, …)
+can also be evaluated at arbitrary (x, y) via `xValue()` — ideal for
+computing exact growth curves without FFT artifacts.
+
+### 10.3 Spatially and colour-varying PSF
+
+**Chromatic (wavelength-dependent) PSF** is a first-class concept:
+
+- `ChromaticObject` — base class wrapping a `GSObject`; transformation args
+  can be functions of wavelength λ.
+- `ChromaticAtmosphere(base_obj, base_wavelength, zenith_angle, …)` —
+  differential chromatic refraction (DCR) + λ∝⁻⁰·² seeing scaling.
+- `ChromaticOpticalPSF(lam, diam, aberrations, …)` — λ-dependent diffraction
+  and Zernike scaling.
+- `ChromaticAiry`, `ChromaticRealGalaxy`, `InterpolatedChromaticObject`.
+- `ChromaticConvolution`, `ChromaticSum`, `ChromaticTransformation`.
+
+**Bandpass integration:**
+
+```python
+bp = galsim.Bandpass('LSST_r.dat', wave_type='nm')
+image = chromatic_obj.drawImage(bp, scale=0.2)
+```
+
+The integrator caches SED×Bandpass products for speed.  `Spectrum` objects
+(built-in SEDs like `SED('CWW_E_ext.sed', wave_type='nm')`) model galaxy/star
+spectral energy distributions.
+
+**Field-varying PSF:**
+
+- `PhaseScreenList.makePSF(theta=(x_angle, y_angle))` — atmospheric PSF at
+  a specific field angle (the phase screens compute the wavefront at that
+  angle).
+- `galsim.roman.getPSF(SCA, bandpass, SCA_pos)` — Roman Space Telescope PSF
+  with Zernike aberrations interpolated across each SCA from WebbPSF tables.
+- No built-in "multi-position PSF manager" — users loop over positions and
+  construct per-position PSFs manually.
+
+**Relevance:** Chromatic effects (DCR + λ-dependent seeing) can be significant
+for growth-curve photometry in wide-band surveys.  GalSim allows quantifying
+this bias.  Field-varying PSF is relevant for large-format detectors (Roman,
+LSST).
+
+### 10.4 Sensor effects
+
+**Brighter-fatter effect, charge diffusion, tree rings:**
+
+```python
+sensor = galsim.SiliconSensor(
+    name='lsst_itl_50_8',    # also 'lsst_e2v_*' models
+    strength=1.0,            # brighter-fatter amplitude
+    diffusion_factor=1.0,    # charge diffusion (0 to disable)
+    treering_func=...,       # LookupTable for radial tree ring profile
+    treering_center=...,     # PositionD
+)
+```
+
+Applied during photon accumulation: `image = obj.drawImage(..., sensor=sensor,
+method='phot')`.
+
+**Roman-specific detector effects** (`galsim.roman`):
+
+| Function | Effect |
+|----------|--------|
+| `applyNonlinearity(img)` | Second-order non-linearity: `counts_out = counts_in + β·counts_in²` |
+| `addReciprocityFailure(img, exptime)` | Wavelength-dependent QE drop at low flux |
+| `applyIPC(img)` | Inter-pixel capacitance (3×3 convolution kernel) |
+| `applyPersistence(img, prev_exposures)` | Residual images from prior exposures |
+
+**Not implemented** (planned): cosmic rays, saturation/bleeding, vignetting,
+fringing.
+
+### 10.5 Integration approach for our code
+
+The current `simulate_image` in `src/gcphotom/simulator.py` uses
+`photutils.datasets.make_model_image` to render Moffat sources.  Replacing
+this with GalSim involves:
+
+```python
+import galsim as gs
+
+# 1. Build profiles per source
+profiles = []
+for src in catalog:
+    moffat = gs.Moffat(beta=alpha, scale_radius=gamma / beta, flux=src['flux'])
+    moffat = moffat.shift(dx=src['x'], dy=src['y'])
+    profiles.append(moffat)
+
+# 2. Sum all profiles
+scene = gs.Add(profiles)
+
+# 3. Draw
+image = scene.drawImage(nx=shape[1], ny=shape[0], scale=1.0,
+                        dtype=np.float32, method='auto')
+```
+
+**Key adaptations needed:**
+
+| Current (`photutils`) | GalSim equivalent |
+|------------------------|-------------------|
+| `make_model_image(coords, fluxes, flux_radius=gamma/alpha,…)` | `galsim.Moffat(beta, scale_radius).shift(dx,dy)` + `galsim.Add` + `drawImage` |
+| Moffat only | Any `GSObject` (Kolmogorov, Airy, `OpticalPSF`, `InterpolatedImage`, …) |
+| Additive Gaussian + Poisson noise | `galsim.GaussianNoise(rng, sigma)` + Poisson via `method='phot'` |
+| WCS via pixel scale scalar | `galsim.PixelScale(scale)` or `galsim.AffineTransform` or `galsim.FitsWCS` |
+| No chromaticity | `ChromaticObject` + `Bandpass` integration |
+
+The Monte Carlo loop structure (`catalog_fn` → `simulate_image` → estimators)
+remains unchanged — only `simulate_image` (and optionally `make_source_catalog`
+to attach SEDs) needs modification.
+
+**Dependency:** GalSim is a large package with a C++ core and requires FFTW.
+Installed via `pip install galsim` or `conda install -c conda-forge galsim`.
+It does not depend on JAX — the two can coexist, but GalSim will be the
+bottleneck for Monte Carlo loops (it is optimised, but single-threaded in
+Python).
+
+### 10.6 Additional relevant capabilities
+
+| Feature | Details |
+|---------|---------|
+| **Correlated noise** | `CorrelatedNoise` from image / power spectrum; `whitenImage()`, `symmetrizeImage()`; pre-built `getCOSMOSNoise()` for HST F814W |
+| **Real galaxies** | `RealGalaxy` from HST COSMOS catalog (56k–87k galaxies); `RealGalaxyCatalog`; supports chromatic extension |
+| **WCS** | Full hierarchy: `PixelScale`, `ShearWCS`, `AffineTransform`, `FitsWCS`, `TanWCS`, `FittedSIPWCS`, celestial frames |
+| **Roman module** | `galsim.roman`: bandpasses, PSF per SCA+position, WCS, sky background, detector effects, scheduling (bestPA, allowedPos) |
+| **Zernike utilities** | `galsim.zernike.Zernike` — evaluate, fit, compose Noll/annular polynomials; used by `OpticalPSF` |
+| **Lookup tables** | `galsim.LookupTable` — 1-D interpolation for SEDs, bandpasses, tree ring profiles |
+| **Config system** | YAML-based simulation descriptions for non-Python users (not relevant to our API) |
+
+### 10.7 Summary
+
+GalSim would strengthen our simulations by adding:
+
+1. **Realistic PSF variety** — Kolmogorov, von Karman, aberrated optical, data-driven
+2. **Chromatic effects** — DCR, λ-dependent seeing, bandpass integration
+3. **Sensor effects** — brighter-fatter, charge diffusion, tree rings
+4. **Correlated noise** — realistic sky subtraction residuals
+5. **Real galaxies** — COSMOS-based training/testing
+
+The main cost is API adaptation in `simulate_image` and a heavier dependency
+(FFTW, C++ compilation).  The Monte Carlo loop structure, estimator API, and
+bias analysis code need no changes.
