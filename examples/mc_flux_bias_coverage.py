@@ -33,3 +33,7 @@ flux_stats = gcp.montecarlo.compute_flux_bias(results, nbins=10)
 gcp.montecarlo.plot_flux_bias(flux_stats)
 plt.savefig("mc_flux_bias.png", dpi=150)
 print("Saved mc_flux_bias.png")
+
+gcp.montecarlo.plot_estimation_times(results)
+plt.savefig("mc_estimation_times.png", dpi=150)
+print("Saved mc_estimation_times.png")
