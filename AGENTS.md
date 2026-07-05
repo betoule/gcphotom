@@ -39,17 +39,19 @@
 ## Example scripts
 
 Example scripts under `examples/` must support interactive use:
-- **Do not** call `matplotlib.use('Agg')` or any non-interactive backend.
 - **Do not** close figures (`plt.close()`, `plt.close('all')`, `plt.clf()`, etc.).
 - Save figures to file before `plt.show()`.
 - End with `plt.show()` (or `plt.show(block=True)`) to display figures in interactive
   sessions without blocking further commands.
-- If a script can run headless too, guard file-saving behind `plt.show()`:
+- Use `matplotlib.use("Agg")` for headless friendliness, but allow override via
+  the ``MPLBACKEND`` environment variable so interactive users can select their
+  preferred backend:
   ```python
-  # Save first, then show
-  fig.savefig('output.png', dpi=150)
-  plt.show()
+  import matplotlib
+  matplotlib.use("Agg")
+  import matplotlib.pyplot as plt
   ```
+  Users run interactively with: ``MPLBACKEND=TkAgg uv run python examples/...``
 
 ## Behavioral guidelines
 
