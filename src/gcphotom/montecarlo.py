@@ -131,17 +131,25 @@ def gc_fixed_back_estimator(image, detections, cog, fit_kwargs=None):
 def aperture_estimator(image, detections, cog):
     """Aperture photometry with aperture correction from bright isolated stars.
 
-    The aperture correction factor is computed as the median of the ratio
-    of large-aperture flux to small-aperture flux measured on bright,
-    isolated sources.  This avoids any reliance on a growth-curve PSF fit.
+    The aperture correction converts small-aperture flux to total flux
+    using a data-driven PSF model: the PSF shape parameters (gamma,
+    alpha) are inferred from the ratio of fluxes at two intermediate
+    radii measured on bright, isolated sources, and the correction to
+    total flux is computed from those parameters.
+    This avoids both the large confusion bias at wide apertures and
+    the need for a full growth-curve fit.
     """
     radii = np.asarray(cog["radius"])
     n_radii = len(radii)
 
+    # Aperture indices: small ~ FWHM, large at a moderate radius where the
+    # PSF captures nearly all flux but neighbour confusion is still low.
     r_small_idx = min(2, n_radii - 2)
+    r_large_idx = min(n_radii - 2, max(4, n_radii - 5))
     r_small = radii[r_small_idx]
-    r_large = radii[-1]
+    r_large = radii[r_large_idx]
 
+    # Global background map
     bkg_map = detections["bkg_map"]
     det_cat = detections["det_cat"]
     x = np.clip(
@@ -153,37 +161,76 @@ def aperture_estimator(image, detections, cog):
     bkg_local = np.asarray(bkg_map[y, x], dtype=float)
 
     flux_small = cog["flux_clean"][:, r_small_idx] - bkg_local * np.pi * r_small**2
-    flux_large = cog["flux_clean"][:, -1] - bkg_local * np.pi * r_large**2
+    flux_large = cog["flux_clean"][:, r_large_idx] - bkg_local * np.pi * r_large**2
 
-    contam_frac = np.where(
-        cog["flux"][:, -1] > 0,
-        cog["contamination"][:, -1] / cog["flux"][:, -1],
-        0.0,
-    )
-
-    flux_threshold = np.nanmedian(flux_large)
-    bright = flux_large > flux_threshold
-    isolated = contam_frac < 0.1
-
-    good = (
-        bright
-        & isolated
-        & np.isfinite(flux_small)
+    valid = (
+        np.isfinite(flux_small)
         & np.isfinite(flux_large)
         & (flux_small > 0)
         & (flux_large > 0)
     )
 
-    if good.sum() < 3:
-        good = (
-            np.isfinite(flux_small)
-            & np.isfinite(flux_large)
-            & (flux_small > 0)
-            & (flux_large > 0)
-        )
+    if valid.sum() < 5:
+        return {
+            "best_fit": {"flux": np.full(len(det_cat), np.nan)},
+            "uncertainty": None,
+        }
 
-    ratios = flux_large[good] / flux_small[good]
-    ac = np.median(ratios)
+    bads = _bads(detections["det_cat"])
+
+    # Isolation based on contamination at the large aperture radius
+    contam_frac = np.where(
+        cog["flux"][:, r_large_idx] > 0,
+        cog["contamination"][:, r_large_idx] / cog["flux"][:, r_large_idx],
+        0.0,
+    )
+    ct = np.percentile(contam_frac[valid], 30)
+
+    flux_threshold = np.median(flux_small[valid])
+    bright = flux_small > flux_threshold
+
+    good = valid & bright & ~bads & (contam_frac <= ct)
+
+    if good.sum() < 5:
+        good = valid & ~bads & (contam_frac <= ct)
+    if good.sum() < 3:
+        good = valid & ~bads
+
+    # --- Aperture correction ---
+    # The measured large/small ratio equals moffat_flux(r_large) /
+    # moffat_flux(r_small).  Dividing by the former converts the ratio
+    # to the total flux correction 1 / moffat_flux(r_small).
+    # We assume a Moffat profile with alpha=3 and estimate gamma from
+    # the ratio at two different radii.
+    r_mid_idx = min(n_radii - 2, max(3, r_large_idx - 2))
+    flux_mid = (
+        cog["flux_clean"][:, r_mid_idx] - bkg_local * np.pi * radii[r_mid_idx] ** 2
+    )
+
+    valid_mid = valid & np.isfinite(flux_mid) & (flux_mid > 0)
+    good_mid = good & valid_mid
+
+    if good_mid.sum() >= 5:
+        large_ratio = np.median(flux_large[good_mid] / flux_small[good_mid])
+        mid_ratio = np.median(flux_mid[good_mid] / flux_small[good_mid])
+        shape_ratio = large_ratio / mid_ratio
+
+        alpha_assumed = 3.0
+        gamma_grid = np.linspace(1.0, 10.0, 500)
+        expected_shape = gcp.gcmodel.moffat_flux(r_large, gamma_grid, alpha_assumed) / (
+            gcp.gcmodel.moffat_flux(radii[r_mid_idx], gamma_grid, alpha_assumed) + 1e-30
+        )
+        gamma_best = float(gamma_grid[np.argmin(np.abs(expected_shape - shape_ratio))])
+        f_large = float(gcp.gcmodel.moffat_flux(r_large, gamma_best, alpha_assumed))
+        ac = large_ratio / f_large
+    else:
+        # Fallback: assume gamma=3 (typical ground-based seeing)
+        large_ratio = np.median(flux_large[good] / flux_small[good])
+        f_large = float(gcp.gcmodel.moffat_flux(r_large, 3.0, 3.0))
+        ac = large_ratio / f_large
+
+    if not 1.0 < ac < 5.0:
+        ac = large_ratio
 
     flux_ap = flux_small * ac
 
