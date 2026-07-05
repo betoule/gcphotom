@@ -580,12 +580,16 @@ def plot_scalar_bias(results, params=("gamma", "alpha"), figsize=None):
         true_val = getattr(results[0]["params"], param)
 
         for idx, name in enumerate(colors):
-            vals = []
+            vals, errs = [], []
             for r in results:
                 bf = r.get(name, {}).get("best_fit", {})
                 v = bf.get(param)
                 if v is not None and not hasattr(v, "__len__"):
                     vals.append(float(v))
+                    se = bf.get("std_errors", {})
+                    errs.append(
+                        float(se.get(param, 0.0)) if isinstance(se, dict) else 0.0
+                    )
 
             if not vals:
                 continue
@@ -593,7 +597,16 @@ def plot_scalar_bias(results, params=("gamma", "alpha"), figsize=None):
             x = np.full(len(vals), idx) + np.random.default_rng(42).uniform(
                 -0.15, 0.15, len(vals)
             )
-            ax.scatter(x, vals, s=8, color=colors[name], alpha=0.5)
+            ax.errorbar(
+                x,
+                vals,
+                yerr=errs,
+                fmt="o",
+                color=colors[name],
+                alpha=0.5,
+                markersize=3,
+                capsize=0,
+            )
 
         ax.set_xticks(range(len(colors)))
         ax.set_xticklabels(list(colors.keys()), rotation=20, ha="right", fontsize=8)
