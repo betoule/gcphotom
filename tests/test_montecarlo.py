@@ -1,5 +1,7 @@
 """Tests for the Monte Carlo bias/coverage framework."""
 
+import os
+
 import numpy as np
 import pytest
 
@@ -23,10 +25,10 @@ def mc_config():
 
 @pytest.fixture(scope="module")
 def mc_results(mc_config):
-    """Run 1 MC realization and return results."""
+    """Run 1 MC realization and return results list."""
     mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=1, seed=42)
-    summary = mc.run(verbose=False, show_progress=False)
-    return mc, summary
+    results = mc.run(verbose=False, show_progress=False)
+    return mc, results
 
 
 class TestSimulationConfig:
@@ -58,39 +60,62 @@ class TestDefaultPipeline:
     def test_returns_expected_keys(self, mc_results):
         mc, _ = mc_results
         res = mc.results[0]
+        assert "params" in res
         for key in (
-            "fitted",
-            "fitted_no_back",
-            "fitter",
-            "input_cat",
-            "psf",
-            "aperture",
-            "catalog",
+            "GC (est. back)",
+            "GC (fixed back)",
+            "PSF photometry",
+            "Aperture + AC",
+            "Background",
+            "Gamma",
+            "Alpha",
         ):
             assert key in res
+
+    def test_estimator_entry_structure(self, mc_results):
+        mc, _ = mc_results
+        res = mc.results[0]
+        for key in (
+            "GC (est. back)",
+            "GC (fixed back)",
+            "PSF photometry",
+            "Aperture + AC",
+            "Background",
+        ):
+            entry = res[key]
+            assert "best_fit" in entry
+            assert "uncertainty" in entry
+            assert "extra" in entry
+            assert "truth" in entry["extra"]
+            assert "bias_scale" in entry["extra"]
+            assert entry["extra"]["bias_scale"] == 100.0
+
+        for key in ("Gamma", "Alpha"):
+            entry = res[key]
+            assert "best_fit" in entry
+            assert "uncertainty" in entry
+            assert "extra" in entry
+            assert "truth" in entry["extra"]
+            assert np.ndim(entry["best_fit"]) == 0
 
     def test_fitted_flux_is_finite(self, mc_results):
         mc, _ = mc_results
         for res in mc.results:
-            flux = np.asarray(res["fitted"]["flux"])
+            flux = np.asarray(res["GC (est. back)"]["best_fit"])
             assert np.all(np.isfinite(flux[~np.isnan(flux)]))
 
 
 class TestMonteCarlo:
     def test_run_returns_results(self, mc_results):
-        mc, summary = mc_results
-        assert summary.realized > 0
-        assert summary.total == 1
-        assert len(mc.results) == summary.realized
+        mc, results = mc_results
+        assert len(results) > 0
+        assert len(mc.results) == len(results)
 
     def test_each_realization_has_different_catalog(self, mc_config):
         mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=2, seed=42)
-        mc.run(verbose=False, show_progress=False)
-        catalogs = [r["catalog"] for r in mc.results]
-        for i in range(len(catalogs) - 1):
-            assert not np.allclose(catalogs[i]["flux"], catalogs[i + 1]["flux"])
-
-        fluxes = [np.asarray(r["fitted"]["flux"]) for r in mc.results]
+        results = mc.run(verbose=False, show_progress=False)
+        # Each result should have different best-fit fluxes
+        fluxes = [np.asarray(r["GC (est. back)"]["best_fit"]) for r in results]
         for i in range(len(fluxes) - 1):
             min_len = min(len(fluxes[i]), len(fluxes[i + 1]))
             assert not np.allclose(fluxes[i][:min_len], fluxes[i + 1][:min_len])
@@ -111,18 +136,28 @@ class TestMonteCarlo:
             bf, _ = fitter.fit(**cfg.fit_kwargs, show_progress=False)
             fitted = fitter.results(bf)
             input_cat = gcp.cross_match(det_cat, catalog)
+            flux_truth = np.asarray(input_cat["flux"])
             return {
-                "fitted": fitted,
-                "fitter": fitter,
-                "input_cat": input_cat,
-                "catalog": catalog,
+                "params": cfg,
+                "MyFlux": {
+                    "best_fit": np.asarray(fitted["flux"]),
+                    "uncertainty": None,
+                    "extra": {"truth": flux_truth, "bias_scale": 100.0},
+                },
+                "MyGamma": {
+                    "best_fit": fitted["gamma"],
+                    "uncertainty": fitted.get("std_errors", {}).get("gamma"),
+                    "extra": {"truth": cfg.gamma, "bias_scale": 100.0},
+                },
             }
 
         mc = gcp.montecarlo.MonteCarlo(
             mc_config, n_realizations=1, seed=42, pipeline=simple_pipeline
         )
-        summary = mc.run(verbose=False, show_progress=False)
-        assert summary.realized > 0
+        results = mc.run(verbose=False, show_progress=False)
+        assert len(results) > 0
+        assert "MyFlux" in results[0]
+        assert "MyGamma" in results[0]
 
     def test_failed_realization_is_warned(self, mc_config):
         def failing_pipeline(image, catalog, cfg):
@@ -132,45 +167,18 @@ class TestMonteCarlo:
             mc_config, n_realizations=1, seed=42, pipeline=failing_pipeline
         )
         with pytest.warns(UserWarning):
-            summary = mc.run(verbose=False, show_progress=False)
-        assert summary.realized == 0
-
-
-class TestCollectData:
-    def test_collect_flux_data(self, mc_results):
-        mc, _ = mc_results
-        x, truth, estimate, se = gcp.montecarlo._collect_data(
-            mc.results,
-            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_estimate=lambda r: np.asarray(r["fitted"]["flux"]),
-            get_std=lambda r: np.asarray(r["fitted"]["std_errors"]["flux"]),
-        )
-
-        assert len(x) > 0
-        assert len(x) == len(truth) == len(estimate) == len(se)
-        assert np.all(np.isfinite(x))
-
-    def test_no_std_errors(self, mc_results):
-        mc, _ = mc_results
-        x, truth, estimate, se = gcp.montecarlo._collect_data(
-            mc.results,
-            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_estimate=lambda r: np.asarray(r["aperture"]["flux"]),
-            get_std=None,
-        )
-
-        assert se is None
-        assert len(x) == len(truth) == len(estimate)
+            results = mc.run(verbose=False, show_progress=False)
+        assert len(results) == 0
 
 
 class TestComputeBiasCoverage:
-    def test_flux_estimators(self, mc_results, mc_config):
+    def test_flux_estimators(self, mc_results):
         mc, _ = mc_results
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators["flux"], nbins=3, sigma_levels=(1.0,)
+            mc.results,
+            estimators=["GC (est. back)", "GC (fixed back)"],
+            nbins=3,
+            sigma_levels=(1.0,),
         )
 
         assert "GC (est. back)" in stats
@@ -179,12 +187,11 @@ class TestComputeBiasCoverage:
         for key in ("xbins", "bias", "bias_err", "rms", "coverage_1.0sigma"):
             assert key in s
 
-    def test_background_estimator(self, mc_results, mc_config):
+    def test_background_estimator(self, mc_results):
         mc, _ = mc_results
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
             mc.results,
-            estimators=estimators["background"],
+            estimators=["Background"],
             nbins=3,
             sigma_levels=(1.0,),
         )
@@ -194,11 +201,13 @@ class TestComputeBiasCoverage:
         for key in ("xbins", "bias", "bias_err", "rms", "coverage_1.0sigma"):
             assert key in s
 
-    def test_bias_and_coverage_are_reasonable(self, mc_results, mc_config):
+    def test_bias_and_coverage_are_reasonable(self, mc_results):
         mc, _ = mc_results
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators["flux"], nbins=3, sigma_levels=(1.0,)
+            mc.results,
+            estimators=["GC (est. back)"],
+            nbins=3,
+            sigma_levels=(1.0,),
         )
         bias = stats["GC (est. back)"]["bias"]
         cov = stats["GC (est. back)"]["coverage_1.0sigma"]
@@ -207,13 +216,25 @@ class TestComputeBiasCoverage:
         assert np.all((cov >= 0) & (cov <= 1))
         assert np.all(rms >= 0)
 
+    def test_auto_detect_estimators(self, mc_results):
+        mc, _ = mc_results
+        # Without specifying estimators, should auto-detect per-source ones
+        stats = gcp.montecarlo.compute_bias_coverage(
+            mc.results, nbins=3, sigma_levels=(1.0,)
+        )
+        # Should contain flux & background estimators, but not Gamma/Alpha
+        for name in ("GC (est. back)", "GC (fixed back)", "Background"):
+            assert name in stats, f"Missing {name}"
+
 
 class TestPlotBiasCoverage:
-    def test_returns_axes(self, mc_results, mc_config, tmp_path):
+    def test_returns_axes(self, mc_results, tmp_path):
         mc, _ = mc_results
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
         stats = gcp.montecarlo.compute_bias_coverage(
-            mc.results, estimators=estimators["flux"], nbins=3, sigma_levels=(1.0,)
+            mc.results,
+            estimators=["GC (est. back)"],
+            nbins=3,
+            sigma_levels=(1.0,),
         )
 
         import matplotlib.pyplot as plt
@@ -228,11 +249,10 @@ class TestPlotBiasCoverage:
 
 
 class TestNuisanceStats:
-    def test_compute_nuisance_stats(self, mc_results, mc_config):
+    def test_compute_nuisance_stats(self, mc_results):
         mc, _ = mc_results
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
         nstats = gcp.montecarlo.compute_nuisance_stats(
-            mc.results, estimators=estimators["nuisance"]
+            mc.results, estimators=["Gamma", "Alpha"]
         )
 
         assert "Gamma" in nstats
@@ -250,11 +270,16 @@ class TestNuisanceStats:
                 assert key in s
             assert np.isfinite(s["mean_bias"])
 
-    def test_plot_nuisance_summary(self, mc_results, mc_config, tmp_path):
+    def test_auto_detect_nuisance(self, mc_results):
         mc, _ = mc_results
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
+        nstats = gcp.montecarlo.compute_nuisance_stats(mc.results)
+        assert "Gamma" in nstats
+        assert "Alpha" in nstats
+
+    def test_plot_nuisance_summary(self, mc_results, tmp_path):
+        mc, _ = mc_results
         nstats = gcp.montecarlo.compute_nuisance_stats(
-            mc.results, estimators=estimators["nuisance"]
+            mc.results, estimators=["Gamma", "Alpha"]
         )
 
         import matplotlib.pyplot as plt
@@ -264,12 +289,11 @@ class TestNuisanceStats:
         fig.savefig(str(tmp_path / "test_nuisance_plot.png"))
         plt.close(fig)
 
-    def test_plot_background_bias(self, mc_results, mc_config, tmp_path):
+    def test_plot_background_bias(self, mc_results, tmp_path):
         mc, _ = mc_results
-        estimators = gcp.montecarlo.build_default_estimators(mc_config)
         bg_stats = gcp.montecarlo.compute_bias_coverage(
             mc.results,
-            estimators=estimators["background"],
+            estimators=["Background"],
             nbins=3,
             sigma_levels=(1.0,),
         )
@@ -281,3 +305,178 @@ class TestNuisanceStats:
         fig = ax.get_figure()
         fig.savefig(str(tmp_path / "test_background_plot.png"))
         plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Save / load round-trip tests
+# ---------------------------------------------------------------------------
+
+
+class TestSaveLoadResults:
+    """Round-trip save/load of raw MC results via pickle."""
+
+    def test_save_and_load(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        path = str(tmp_path / "mc_results.pkl")
+        written = gcp.montecarlo.save_results(path, mc.results)
+        assert written.endswith(".pkl")
+
+        loaded = gcp.montecarlo.load_results(path)
+        assert len(loaded) == len(mc.results)
+        assert set(loaded[0].keys()) == set(mc.results[0].keys())
+
+    def test_save_and_load_default_extension(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        path = str(tmp_path / "mc_results")
+        gcp.montecarlo.save_results(path, mc.results)
+        assert os.path.exists(str(tmp_path / "mc_results.pkl"))
+
+        loaded = gcp.montecarlo.load_results(path)
+        assert len(loaded) == len(mc.results)
+
+    def test_load_results_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            gcp.montecarlo.load_results(str(tmp_path / "nonexistent.pkl"))
+
+    def test_loaded_results_compute_bias_coverage(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        path = str(tmp_path / "mc_flux.pkl")
+        gcp.montecarlo.save_results(path, mc.results)
+        loaded = gcp.montecarlo.load_results(path)
+
+        stats = gcp.montecarlo.compute_bias_coverage(
+            loaded, estimators=["GC (est. back)"], nbins=3, sigma_levels=(1.0,)
+        )
+        assert "GC (est. back)" in stats
+        assert "xbins" in stats["GC (est. back)"]
+
+    def test_loaded_results_compute_nuisance(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        path = str(tmp_path / "mc_nuisance.pkl")
+        gcp.montecarlo.save_results(path, mc.results)
+        loaded = gcp.montecarlo.load_results(path)
+
+        nstats = gcp.montecarlo.compute_nuisance_stats(
+            loaded, estimators=["Gamma", "Alpha"]
+        )
+        assert "Gamma" in nstats
+        assert np.isfinite(nstats["Gamma"]["mean_bias"])
+
+    def test_consistency_original_vs_loaded(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        nbins = 3
+        sigma_levels = (1.0, 2.0)
+
+        original = gcp.montecarlo.compute_bias_coverage(
+            mc.results,
+            estimators=["GC (est. back)"],
+            nbins=nbins,
+            sigma_levels=sigma_levels,
+        )
+
+        path = str(tmp_path / "mc_flux_cons.pkl")
+        gcp.montecarlo.save_results(path, mc.results)
+        loaded = gcp.montecarlo.load_results(path)
+        recomputed = gcp.montecarlo.compute_bias_coverage(
+            loaded,
+            estimators=["GC (est. back)"],
+            nbins=nbins,
+            sigma_levels=sigma_levels,
+        )
+
+        for label in original:
+            for key in original[label]:
+                assert np.allclose(
+                    recomputed[label][key], original[label][key], equal_nan=True
+                )
+
+
+class TestSaveLoadStats:
+    """Round-trip save/load of computed stats dicts via pickle."""
+
+    def test_save_and_load_bias_coverage(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        stats = gcp.montecarlo.compute_bias_coverage(
+            mc.results,
+            estimators=["GC (est. back)"],
+            nbins=3,
+            sigma_levels=(1.0, 2.0),
+        )
+
+        path = str(tmp_path / "bias_stats.pkl")
+        written = gcp.montecarlo.save_stats(path, stats)
+        assert written.endswith(".pkl")
+
+        loaded = gcp.montecarlo.load_stats(path)
+        assert set(loaded.keys()) == set(stats.keys())
+        for label in stats:
+            for key in stats[label]:
+                assert np.allclose(
+                    loaded[label][key], stats[label][key], equal_nan=True
+                )
+
+    def test_save_and_load_nuisance_stats(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        nstats = gcp.montecarlo.compute_nuisance_stats(
+            mc.results, estimators=["Gamma", "Alpha"]
+        )
+
+        path = str(tmp_path / "nuisance_stats.pkl")
+        gcp.montecarlo.save_stats(path, nstats)
+
+        loaded = gcp.montecarlo.load_stats(path)
+        assert set(loaded.keys()) == set(nstats.keys())
+        for label in nstats:
+            for key in nstats[label]:
+                if key in ("mean_bias", "std_bias", "rms_bias"):
+                    assert loaded[label][key] == nstats[label][key]
+                else:
+                    assert np.allclose(
+                        loaded[label][key], nstats[label][key], equal_nan=True
+                    )
+
+    def test_load_stats_default_extension(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        stats = gcp.montecarlo.compute_bias_coverage(
+            mc.results,
+            estimators=["GC (est. back)"],
+            nbins=3,
+            sigma_levels=(1.0,),
+        )
+
+        path = str(tmp_path / "noext")
+        gcp.montecarlo.save_stats(path, stats)
+        loaded = gcp.montecarlo.load_stats(path)
+        assert set(loaded.keys()) == set(stats.keys())
+
+    def test_saved_stats_can_be_plotted(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        stats = gcp.montecarlo.compute_bias_coverage(
+            mc.results,
+            estimators=["GC (est. back)"],
+            nbins=3,
+            sigma_levels=(1.0,),
+        )
+
+        path = str(tmp_path / "plot_test.pkl")
+        gcp.montecarlo.save_stats(path, stats)
+        loaded = gcp.montecarlo.load_stats(path)
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        ax_bias, ax_cov = gcp.montecarlo.plot_bias_coverage(loaded, sigma_level=1.0)
+        assert ax_bias is not None
+        plt.close(ax_bias.get_figure())
+
+    def test_load_stats_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            gcp.montecarlo.load_stats(str(tmp_path / "nonexistent.pkl"))
+
+    def test_save_stats_empty(self, tmp_path):
+        path = str(tmp_path / "empty.pkl")
+        gcp.montecarlo.save_stats(path, {})
+        loaded = gcp.montecarlo.load_stats(path)
+        assert loaded == {}

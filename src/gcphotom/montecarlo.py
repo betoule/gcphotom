@@ -1,26 +1,16 @@
 """Monte Carlo framework for photometry bias and coverage analysis.
 
-Provides tools to run multiple realizations of a photometry pipeline and
-compute bias and coverage statistics for fitted parameters.
-
-Parameter types
----------------
-The framework distinguishes three kinds of parameters:
-
-- **Flux** — per-source flux estimates, studied as bias vs true flux
-  (:func:`compute_bias_coverage`, :func:`plot_bias_coverage`).
-- **Background** — per-source background estimates, also vs flux
-  (:func:`compute_bias_coverage`, :func:`plot_background_bias`).
-- **Nuisance** — global scalar parameters (gamma, alpha) fitted once
-  per realization (:func:`compute_nuisance_stats`,
-  :func:`plot_nuisance_summary`).
+Each realization runs a photometry pipeline on a random simulated image and
+returns a flat dict of per-estimator results.  N realizations is simply a
+list of such dicts, saved/loaded with pickle.
 """
 
 from __future__ import annotations
 
+import os
+import pickle
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,9 +22,7 @@ from gcphotom.stats import bin_statistic
 
 @dataclass
 class SimulationConfig:
-    """Configuration for a Monte Carlo simulation.
-
-    A new random catalog is drawn for each realization.
+    """Simulation parameters for one Monte Carlo realization.
 
     Parameters
     ----------
@@ -68,8 +56,8 @@ class SimulationConfig:
     )
 
 
-def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> dict:
-    """Default photometry pipeline mirroring the flux_reconstruction_quality example.
+def default_pipeline(image: np.ndarray, catalog, cfg: SimulationConfig) -> dict:
+    """Run the default photometry pipeline and return per-estimator results.
 
     Parameters
     ----------
@@ -83,8 +71,10 @@ def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> 
     Returns
     -------
     dict
-        Keys: ``fitted``, ``fitted_no_back``, ``psf``, ``aperture``,
-        ``input_cat``, ``fitter``, ``catalog``.
+        Keys are ``"params"`` (the *cfg*) and one entry per estimator
+        (e.g. ``"GC (est. back)"``, ``"Background"``, ``"Gamma"``, etc.).
+        Each estimator entry is ``{"best_fit": ..., "uncertainty": ...,
+        "extra": {"truth": ..., "bias_scale": 100.0}}``.
     """
     seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
         image, n_pixels=cfg.n_pixels
@@ -104,6 +94,8 @@ def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> 
     fitter.detect_contamination(best_fit)
     best_fit, _ = fitter.fit(**cfg.fit_kwargs, compute_uncertainty=True, desc="Fit (2)")
 
+    fitted = fitter.results(best_fit)
+
     best_fit_no_back, _ = fitter.fit(
         **cfg.fit_kwargs,
         fix={"back": np.full(len(best_fit["back"]), np.mean(best_fit["back"]))},
@@ -111,7 +103,6 @@ def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> 
         desc="Fit (fix back)",
     )
 
-    fitted = fitter.results(best_fit)
     fitted_no_back = fitter.results(best_fit_no_back)
     input_cat = gcp.cross_match(det_cat, catalog)
 
@@ -136,36 +127,48 @@ def default_pipeline(image: np.ndarray, catalog: Any, cfg: SimulationConfig) -> 
     ) * ac
     flux_ap_full = np.full(len(det_cat), np.nan)
     flux_ap_full[fitter.kept] = flux_ap
-    kept_cat = input_cat[fitter.kept]
+
+    flux_truth = np.asarray(input_cat["flux"])
+    bg_truth = np.full(len(input_cat), cfg.background)
 
     return {
-        "fitted": fitted,
-        "fitted_no_back": fitted_no_back,
-        "fitter": fitter,
-        "input_cat": input_cat,
-        "catalog": catalog,
-        "psf": {"results": psf_results, "cat": psf_cat},
-        "aperture": {"flux": flux_ap_full},
+        "params": cfg,
+        "GC (est. back)": {
+            "best_fit": np.asarray(fitted["flux"]),
+            "uncertainty": np.asarray(fitted["std_errors"]["flux"]),
+            "extra": {"truth": flux_truth, "bias_scale": 100.0},
+        },
+        "GC (fixed back)": {
+            "best_fit": np.asarray(fitted_no_back["flux"]),
+            "uncertainty": np.asarray(fitted_no_back["std_errors"]["flux"]),
+            "extra": {"truth": flux_truth, "bias_scale": 100.0},
+        },
+        "PSF photometry": {
+            "best_fit": np.asarray(psf_results["flux_fit"]),
+            "uncertainty": None,
+            "extra": {"truth": np.asarray(psf_cat["flux"]), "bias_scale": 100.0},
+        },
+        "Aperture + AC": {
+            "best_fit": flux_ap_full,
+            "uncertainty": None,
+            "extra": {"truth": flux_truth, "bias_scale": 100.0},
+        },
+        "Background": {
+            "best_fit": np.asarray(fitted["back"]),
+            "uncertainty": np.asarray(fitted["std_errors"]["back"]),
+            "extra": {"truth": bg_truth, "x": flux_truth, "bias_scale": 100.0},
+        },
+        "Gamma": {
+            "best_fit": fitted["gamma"],
+            "uncertainty": fitted["std_errors"]["gamma"],
+            "extra": {"truth": cfg.gamma, "bias_scale": 100.0},
+        },
+        "Alpha": {
+            "best_fit": fitted["alpha"],
+            "uncertainty": fitted["std_errors"]["alpha"],
+            "extra": {"truth": cfg.alpha, "bias_scale": 100.0},
+        },
     }
-
-
-@dataclass
-class MonteCarloResults:
-    """Container for per-realization results.
-
-    Attributes
-    ----------
-    realized : int
-        Number of successfully completed realizations.
-    total : int
-        Total number of attempted realizations.
-    results : list of dict
-        Per-realization output from the pipeline callable.
-    """
-
-    realized: int
-    total: int
-    results: list[dict]
 
 
 class MonteCarlo:
@@ -176,7 +179,7 @@ class MonteCarlo:
     Parameters
     ----------
     config : SimulationConfig
-        Simulation parameters (PSF, noise, image size, etc.).
+        Simulation parameters.
     n_realizations : int
         Number of independent realizations.
     seed : int or None
@@ -191,7 +194,7 @@ class MonteCarlo:
         config: SimulationConfig,
         n_realizations: int,
         seed: int | None = None,
-        pipeline: Callable | None = None,
+        pipeline=None,
     ):
         self.config = config
         self.n_realizations = n_realizations
@@ -204,22 +207,22 @@ class MonteCarlo:
         """List of per-realization pipeline outputs."""
         return self._results
 
-    def run(
-        self, verbose: bool = True, show_progress: bool = True
-    ) -> MonteCarloResults:
+    def run(self, verbose: bool = True, show_progress: bool = True) -> list[dict]:
         """Execute all realizations.
 
         Parameters
         ----------
         verbose : bool
-            Print progress every 10 realizations (legacy, use ``show_progress``
+            Print progress every 10 realizations (legacy, use *show_progress*
             instead).
         show_progress : bool
             If ``True``, display a progress bar.
 
         Returns
         -------
-        MonteCarloResults
+        list of dict
+            One dict per successful realization. Each dict contains the
+            simulation params and per-estimator results.
         """
         self._results = []
         rng = np.random.default_rng(self.seed)
@@ -257,206 +260,29 @@ class MonteCarlo:
             try:
                 res = self.pipeline(image, catalog, self.config)
                 self._results.append(res)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 warnings.warn(f"Realization {i + 1} failed: {exc}")
             finally:
                 pbar.update(1)
 
         pbar.close()
-        return MonteCarloResults(
-            realized=len(self._results),
-            total=self.n_realizations,
-            results=self._results,
-        )
+        return self._results
 
 
-def _collect_data(
-    results: list[dict],
-    get_x: Callable[[dict], np.ndarray],
-    get_truth: Callable[[dict], np.ndarray],
-    get_estimate: Callable[[dict], np.ndarray],
-    get_std: Callable[[dict], np.ndarray] | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
-    """Collect (x, truth, estimate, std) arrays from MC results.
-
-    Parameters
-    ----------
-    results : list of dict
-        Per-realization pipeline outputs.
-    get_x : callable
-        Returns the binning variable (e.g. true flux).
-    get_truth : callable
-        Returns the truth value for the parameter of interest.
-    get_estimate : callable
-        Returns the estimated value.
-    get_std : callable or None
-        Returns the standard error array.
-
-    Returns
-    -------
-    x, truth, estimate, std : ndarray
-        Flattened arrays over all realizations (NaNs dropped).
-    """
-    xs, truths, ests, stds = [], [], [], []
-
-    for res in results:
-        x = np.asarray(get_x(res))
-        t = np.asarray(get_truth(res))
-        e = np.asarray(get_estimate(res))
-
-        mask = np.isfinite(x) & np.isfinite(t) & np.isfinite(e)
-        xs.append(x[mask])
-        truths.append(t[mask])
-        ests.append(e[mask])
-
-        if get_std is not None:
-            s = np.asarray(get_std(res))
-            stds.append(s[mask])
-
-    return (
-        np.concatenate(xs),
-        np.concatenate(truths),
-        np.concatenate(ests),
-        np.concatenate(stds) if stds else None,
-    )
+def _estimator_names(results: list[dict]) -> list[str]:
+    """Return estimator keys from the first result, excluding ``"params"``."""
+    return [k for k in results[0] if k != "params"]
 
 
-def _build_estimator_spec(
-    get_x: Callable,
-    get_truth: Callable,
-    get_estimate: Callable,
-    get_std: Callable | None = None,
-    bias_scale: float = 100.0,
-) -> dict:
-    """Build an estimator spec dict from extractor callables."""
-    return {
-        "get_x": get_x,
-        "get_truth": get_truth,
-        "get_estimate": get_estimate,
-        "get_std": get_std,
-        "bias_scale": bias_scale,
-    }
-
-
-def _default_flux_estimators() -> dict[str, dict]:
-    """Build default specs for flux estimators."""
-    return {
-        "GC (est. back)": _build_estimator_spec(
-            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_estimate=lambda r: np.asarray(r["fitted"]["flux"]),
-            get_std=lambda r: np.asarray(r["fitted"]["std_errors"]["flux"]),
-        ),
-        "GC (fixed back)": _build_estimator_spec(
-            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_estimate=lambda r: np.asarray(r["fitted_no_back"]["flux"]),
-            get_std=lambda r: np.asarray(r["fitted_no_back"]["std_errors"]["flux"]),
-        ),
-        "PSF photometry": _build_estimator_spec(
-            get_x=lambda r: np.asarray(r["psf"]["cat"]["flux"]),
-            get_truth=lambda r: np.asarray(r["psf"]["cat"]["flux"]),
-            get_estimate=lambda r: np.asarray(r["psf"]["results"]["flux_fit"]),
-            get_std=None,
-        ),
-        "Aperture + AC": _build_estimator_spec(
-            get_x=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_truth=lambda r: np.asarray(r["input_cat"]["flux"]),
-            get_estimate=lambda r: np.asarray(r["aperture"]["flux"]),
-            get_std=None,
-        ),
-    }
-
-
-def _build_nuisance_spec(
-    param: str,
-    truth_value: float,
-    std_key: str | None,
-    bias_scale: float = 100.0,
-) -> dict:
-    """Build spec for a scalar nuisance parameter (gamma, alpha).
-
-    The parameter is fitted as a single scalar per realization. The spec
-    is designed for use with :func:`compute_nuisance_stats`.
-    """
-
-    def get_estimate(r: dict) -> np.ndarray:
-        return np.asarray(r["fitted"][param])
-
-    return {
-        "truth": truth_value,
-        "get_estimate": get_estimate,
-        "std_key": std_key,
-        "bias_scale": bias_scale,
-    }
-
-
-def _build_background_spec(cfg: SimulationConfig) -> dict:
-    """Build estimator spec for per-source background estimates.
-
-    Unlike global nuisance parameters, the fitted background is
-    per-source and can be studied as a function of flux.
-    """
-
-    def get_x(r: dict) -> np.ndarray:
-        return np.asarray(r["input_cat"]["flux"])
-
-    def get_truth(r: dict) -> np.ndarray:
-        return np.full(len(r["input_cat"]), cfg.background)
-
-    def get_estimate(r: dict) -> np.ndarray:
-        return np.asarray(r["fitted"]["back"])
-
-    def get_std(r: dict) -> np.ndarray | None:
-        se = r["fitted"].get("std_errors", {})
-        try:
-            return np.asarray(se["back"])
-        except (KeyError, TypeError):
-            return np.full(len(r["input_cat"]), np.nan)
-
-    return _build_estimator_spec(
-        get_x=get_x,
-        get_truth=get_truth,
-        get_estimate=get_estimate,
-        get_std=get_std,
-        bias_scale=100.0,
-    )
-
-
-def build_default_estimators(cfg: SimulationConfig) -> dict[str, dict]:
-    """Build all default estimators, grouped by parameter type.
-
-    Returns a dict with three keys, each containing estimator specs
-    suitable for the corresponding compute/plot functions:
-
-    **flux** — per-source flux bias and coverage vs simulated flux.
-    Use with :func:`compute_bias_coverage` and :func:`plot_bias_coverage`.
-
-    **background** — per-source background bias vs simulated flux.
-    Use with :func:`compute_bias_coverage` and :func:`plot_background_bias`.
-
-    **nuisance** — global scalar parameters (gamma, alpha) fitted once
-    per realization. Use with :func:`compute_nuisance_stats` and
-    :func:`plot_nuisance_summary`.
-    """
-    return {
-        "flux": _default_flux_estimators(),
-        "background": {"Background": _build_background_spec(cfg)},
-        "nuisance": {
-            "Gamma": _build_nuisance_spec(
-                "gamma", cfg.gamma, "gamma", bias_scale=100.0
-            ),
-            "Alpha": _build_nuisance_spec(
-                "alpha", cfg.alpha, "alpha", bias_scale=100.0
-            ),
-        },
-    }
+def _is_scalar(val) -> bool:
+    """Return True for scalar or 0‑d array values."""
+    return np.ndim(val) == 0
 
 
 def compute_bias_coverage(
     results: list[dict],
     *,
-    estimators: dict[str, dict] | None = None,
+    estimators: list[str] | None = None,
     nbins: int = 10,
     bins: np.ndarray | None = None,
     sigma_levels: tuple[float, ...] = (1.0, 2.0, 3.0),
@@ -466,10 +292,10 @@ def compute_bias_coverage(
     Parameters
     ----------
     results : list of dict
-        Per-realization pipeline outputs from :class:`MonteCarlo`.
-    estimators : dict, optional
-        Mapping from label to spec dict with keys ``get_x``, ``get_truth``,
-        ``get_estimate``, and optionally ``get_std`` and ``bias_scale``.
+        Per-realization outputs from :class:`MonteCarlo`.
+    estimators : list of str, optional
+        Estimator names to process.  Defaults to all per-source (non-scalar)
+        estimators in *results*.
     nbins : int
         Number of bins along the x-axis.
     bins : ndarray, optional
@@ -486,34 +312,54 @@ def compute_bias_coverage(
     """
     out = {}
 
-    for label, spec in estimators.items():
-        get_x = spec["get_x"]
-        get_truth = spec["get_truth"]
-        get_estimate = spec["get_estimate"]
-        get_std = spec.get("get_std")
-        bias_scale = spec.get("bias_scale", 100.0)
+    if estimators is None:
+        all_names = _estimator_names(results)
+        estimators = [n for n in all_names if not _is_scalar(results[0][n]["best_fit"])]
 
-        x, truth, estimate, se = _collect_data(
-            results, get_x, get_truth, get_estimate, get_std
-        )
+    for label in estimators:
+        xs, truths, ests, stds = [], [], [], []
+        bias_scale = None
 
-        if len(x) == 0:
+        for res in results:
+            entry = res[label]
+            x = np.asarray(entry["extra"].get("x", entry["extra"]["truth"]))
+            t = np.asarray(entry["extra"]["truth"])
+            e = np.asarray(entry["best_fit"])
+            s = entry.get("uncertainty")
+            bs = entry["extra"].get("bias_scale", 100.0)
+
+            if bias_scale is None:
+                bias_scale = bs
+
+            mask = np.isfinite(x) & np.isfinite(t) & np.isfinite(e)
+            xs.append(x[mask])
+            truths.append(t[mask])
+            ests.append(e[mask])
+            if s is not None:
+                s = np.asarray(s)
+                stds.append(s[mask])
+
+        if len(xs) == 0:
             warnings.warn(f"No data for estimator '{label}', skipping.")
             continue
 
-        bias = (estimate / truth - 1.0) * bias_scale
+        x_all = np.concatenate(xs)
+        truth_all = np.concatenate(truths)
+        est_all = np.concatenate(ests)
+        se_all = np.concatenate(stds) if stds else None
+
+        bias = (est_all / truth_all - 1.0) * bias_scale
 
         if bins is None:
             from gcphotom.stats import _build_bins
 
-            valid = np.isfinite(x) & np.isfinite(bias)
-            edges = _build_bins(x[valid], nbins, logbins=True)
+            valid = np.isfinite(x_all) & np.isfinite(bias)
+            edges = _build_bins(x_all[valid], nbins, logbins=True)
         else:
             edges = bins
-        xb = 0.5 * (edges[:-1] + edges[1:])
 
-        _, bias_binned, bias_err = bin_statistic(
-            x,
+        xbinned, bias_binned, bias_err = bin_statistic(
+            x_all,
             bias,
             nbins=nbins,
             bins=edges,
@@ -523,7 +369,7 @@ def compute_bias_coverage(
         )
 
         _, rms_binned, _ = bin_statistic(
-            x,
+            x_all,
             np.abs(bias),
             nbins=nbins,
             bins=edges,
@@ -533,18 +379,18 @@ def compute_bias_coverage(
         )
 
         entry = {
-            "xbins": xb,
+            "xbins": xbinned,
             "bias": bias_binned,
             "bias_err": bias_err,
             "rms": rms_binned,
         }
 
-        if se is not None:
+        if se_all is not None:
             for sigma in sigma_levels:
-                resids = np.abs(estimate - truth)
-                covered = (resids <= sigma * se).astype(float)
+                resids = np.abs(est_all - truth_all)
+                covered = (resids <= sigma * se_all).astype(float)
                 _, cov_binned, _ = bin_statistic(
-                    x,
+                    x_all,
                     covered,
                     nbins=nbins,
                     bins=edges,
@@ -573,9 +419,6 @@ def plot_bias_coverage(
 ) -> tuple[plt.Axes, plt.Axes]:
     """Plot flux bias (with RMS shaded region) and coverage vs simulated flux.
 
-    Designed for per-source flux estimators. For nuisance parameters
-    (gamma, alpha) use :func:`plot_nuisance_summary` instead.
-
     Parameters
     ----------
     stats : dict
@@ -585,7 +428,7 @@ def plot_bias_coverage(
     sigma_level : float
         Which sigma level's coverage to plot.
     expected_coverage : float, optional
-        Expected coverage fraction at ``sigma_level`` (e.g. 0.683 for 1-sigma).
+        Expected coverage fraction at *sigma_level* (e.g. 0.683 for 1-sigma).
     figsize : tuple
         Figure size when creating new axes.
 
@@ -613,7 +456,6 @@ def plot_bias_coverage(
     for label, s in stats.items():
         color = colors.get(label, "k")
 
-        # Shaded RMS region
         if "rms" in s:
             ax_bias.fill_between(
                 s["xbins"],
@@ -672,40 +514,41 @@ def plot_bias_coverage(
 def compute_nuisance_stats(
     results: list[dict],
     *,
-    estimators: dict[str, dict] | None = None,
+    estimators: list[str] | None = None,
 ) -> dict[str, dict]:
     """Compute bias statistics for scalar nuisance parameters across realizations.
 
     Parameters
     ----------
     results : list of dict
-        Per-realization pipeline outputs from :class:`MonteCarlo`.
-    estimators : dict, optional
-        Mapping from label to spec dict with keys ``truth``,
-        ``get_estimate``, and optionally ``bias_scale``.
+        Per-realization outputs from :class:`MonteCarlo`.
+    estimators : list of str, optional
+        Estimator names to process.  Defaults to all scalar estimators in
+        *results*.
 
     Returns
     -------
     dict
-        Mapping from label to dict with keys:
-
-        - ``truth`` — scalar truth value
-        - ``estimates`` — array of per-realization estimated values
-        - ``bias`` — per-realization bias (percent, unless overridden)
-        - ``mean_bias`` — mean bias across realizations
-        - ``std_bias`` — standard deviation of bias
-        - ``rms_bias`` — RMS bias
+        Mapping from label to dict with keys ``truth``, ``estimates``,
+        ``bias``, ``mean_bias``, ``std_bias``, ``rms_bias``.
     """
-    out = {}
-    for label, spec in estimators.items():
-        truth = spec["truth"]
-        bias_scale = spec.get("bias_scale", 100.0)
-        get_estimate = spec["get_estimate"]
+    if estimators is None:
+        all_names = _estimator_names(results)
+        estimators = [n for n in all_names if _is_scalar(results[0][n]["best_fit"])]
 
+    out = {}
+    for label in estimators:
+        truth = None
+        bias_scale = 100.0
         estimates = []
+
         for res in results:
-            raw = np.asarray(get_estimate(res))
-            estimates.append(float(np.nanmean(raw)))
+            entry = res[label]
+            if truth is None:
+                truth = entry["extra"]["truth"]
+                bias_scale = entry["extra"].get("bias_scale", 100.0)
+            estimates.append(float(np.nanmean(np.asarray(entry["best_fit"]))))
+
         estimates = np.array(estimates)
 
         valid = np.isfinite(estimates)
@@ -736,10 +579,6 @@ def plot_nuisance_summary(
     nbins: int = 30,
 ) -> plt.Figure:
     """Plot histogram summary of nuisance parameter bias across realizations.
-
-    For each nuisance parameter (e.g. Gamma, Alpha) a histogram of
-    fitted values is shown with the truth value marked as a vertical
-    dashed line. The mean bias and scatter are annotated.
 
     Parameters
     ----------
@@ -774,7 +613,6 @@ def plot_nuisance_summary(
         ax.set_xlabel(f"Fitted {label}")
         ax.set_ylabel("Realizations")
 
-        # Annotate bias stats
         mean_b = s["mean_bias"]
         std_b = s["std_bias"]
         ax.annotate(
@@ -801,8 +639,7 @@ def plot_background_bias(
     Parameters
     ----------
     stats : dict
-        Output from :func:`compute_bias_coverage` for a background
-        estimator.
+        Output from :func:`compute_bias_coverage` for a background estimator.
     ax : Axes, optional
         Target axes. Created if None.
     figsize : tuple
@@ -843,3 +680,110 @@ def plot_background_bias(
     ax.legend(loc="best", frameon=False)
 
     return ax
+
+
+# ---------------------------------------------------------------------------
+# Save / load raw MC results (pickle)
+# ---------------------------------------------------------------------------
+
+
+def save_results(path: str, results: list[dict]) -> str:
+    """Save MC results to a pickle file.
+
+    Parameters
+    ----------
+    results : list of dict
+        Per-realization outputs from :class:`MonteCarlo`.
+    path : str
+        Output file path (``.pkl`` appended if missing).
+
+    Returns
+    -------
+    str
+        The actual path written to.
+    """
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+    with open(path, "wb") as f:
+        pickle.dump(results, f)
+    return path
+
+
+def load_results(path: str) -> list[dict]:
+    """Load MC results saved with :func:`save_results`.
+
+    Parameters
+    ----------
+    path : str
+        Path to ``.pkl`` file.
+
+    Returns
+    -------
+    list of dict
+        Per-realization outputs, one dict per successful realization.
+    """
+    if not os.path.exists(path):
+        candidate = path + ".pkl"
+        if os.path.exists(candidate):
+            path = candidate
+        else:
+            raise FileNotFoundError(f"Results file not found: {path}")
+
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Save / load computed stats (pickle, for plot reuse)
+# ---------------------------------------------------------------------------
+
+
+def save_stats(path: str, stats: dict[str, dict]) -> str:
+    """Save computed stats to a pickle file for later plotting.
+
+    Accepts the output of :func:`compute_bias_coverage` or
+    :func:`compute_nuisance_stats`.
+
+    Parameters
+    ----------
+    stats : dict
+        Stats dict from :func:`compute_bias_coverage` or
+        :func:`compute_nuisance_stats`.
+    path : str
+        Output file path (``.pkl`` appended if missing).
+
+    Returns
+    -------
+    str
+        The actual path written to.
+    """
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+    with open(path, "wb") as f:
+        pickle.dump(stats, f)
+    return path
+
+
+def load_stats(path: str) -> dict[str, dict]:
+    """Load stats saved with :func:`save_stats`.
+
+    Parameters
+    ----------
+    path : str
+        Path to ``.pkl`` file.
+
+    Returns
+    -------
+    dict
+        Stats dict suitable for :func:`plot_bias_coverage`,
+        :func:`plot_background_bias`, or :func:`plot_nuisance_summary`.
+    """
+    if not os.path.exists(path):
+        candidate = path + ".pkl"
+        if os.path.exists(candidate):
+            path = candidate
+        else:
+            raise FileNotFoundError(f"Stats file not found: {path}")
+
+    with open(path, "rb") as f:
+        return pickle.load(f)
