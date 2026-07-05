@@ -45,10 +45,10 @@ fields = [
         "comment": "b ≈ +42°",
     },
     {
-        "label": "Boötes",
-        "ra": 233.0,
-        "dec": 50.0,
-        "comment": "b ≈ +55°",
+        "label": "Gemini",
+        "ra": 95.0,
+        "dec": 35.0,
+        "comment": "b ≈ +15°",
     },
     {
         "label": "Cygnus",
