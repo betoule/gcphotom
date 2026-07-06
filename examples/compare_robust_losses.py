@@ -7,13 +7,6 @@ aperture contamination from undetected sources and PSF tails.
 
 import time
 
-import matplotlib
-import importlib.util as _util
-
-if _util.find_spec("tkinter") is not None:
-    matplotlib.use("TkAgg")
-else:
-    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 

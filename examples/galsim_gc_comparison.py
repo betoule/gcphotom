@@ -7,18 +7,6 @@ Plots per-source flux reconstruction error for both methods side by side.
 
 import time
 import numpy as np
-import matplotlib
-
-# Test backends by trying to load their modules before importing pyplot.
-# This avoids the lazy-load failure where use() succeeds at registration
-# but fails later when creating a figure.
-import importlib.util as _util
-
-_has_tk = _util.find_spec("tkinter") is not None
-if _has_tk:
-    matplotlib.use("TkAgg")
-else:
-    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from astropy.wcs import WCS
 from functools import partial

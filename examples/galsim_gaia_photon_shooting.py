@@ -9,13 +9,6 @@ Chromatic and sensor effects are ignored for this first demonstration.
 
 import time
 import numpy as np
-import matplotlib
-import importlib.util as _util
-
-if _util.find_spec("tkinter") is not None:
-    matplotlib.use("TkAgg")
-else:
-    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from astropy.wcs import WCS
 

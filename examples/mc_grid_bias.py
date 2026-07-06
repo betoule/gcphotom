@@ -4,13 +4,6 @@ Uses make_test_source_catalog to place sources on a regular grid, so every
 realisation sees the same source positions and fluxes — only the noise varies.
 """
 
-import matplotlib
-import importlib.util as _util
-
-if _util.find_spec("tkinter") is not None:
-    matplotlib.use("TkAgg")
-else:
-    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import gcphotom as gcp

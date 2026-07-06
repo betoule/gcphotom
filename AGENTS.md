@@ -43,20 +43,11 @@ Example scripts under `examples/` must support interactive use:
 - Save figures to file before `plt.show()`.
 - End with `plt.show()` (or `plt.show(block=True)`) to display figures in interactive
   sessions without blocking further commands.
-- Use a tkinter-check pattern so scripts work both headless and interactively
-  without requiring ``MPLBACKEND``:
-  ```python
-  import matplotlib
-  import importlib.util as _util
-  if _util.find_spec("tkinter") is not None:
-      matplotlib.use("TkAgg")
-  else:
-      matplotlib.use("Agg")
-  import matplotlib.pyplot as plt
-  ```
-  This uses TkAgg when tkinter is available (standard Python), otherwise
-  falls back to Agg (headless).  Does not rely on Qt which requires
-  third-party bindings.
+- **Do not** set or force any matplotlib backend in the script.  Simply
+  ``import matplotlib.pyplot as plt`` and let the user's environment or
+  matplotlib defaults handle backend selection.
+- For headless runs, the runner prepends ``MPLBACKEND=Agg`` to the command:
+  ``MPLBACKEND=Agg uv run python examples/...``
 
 ## Behavioral guidelines
 

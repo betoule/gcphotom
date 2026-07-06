@@ -4,13 +4,6 @@ Runs ~100 realizations with random catalogs and produces a single
 plot of flux bias vs simulated flux for several photometry methods.
 """
 
-import matplotlib
-import importlib.util as _util
-
-if _util.find_spec("tkinter") is not None:
-    matplotlib.use("TkAgg")
-else:
-    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import gcphotom as gcp
