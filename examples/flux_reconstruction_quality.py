@@ -1,13 +1,12 @@
 import gcphotom as gcp, numpy as np
 from gcphotom.plots import binplot
 import matplotlib
+import importlib.util as _util
 
-for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
-    try:
-        matplotlib.use(_backend, force=True)
-        break
-    except (ImportError, ValueError):
-        continue
+if _util.find_spec("tkinter") is not None:
+    matplotlib.use("TkAgg")
+else:
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from photutils.detection import DAOStarFinder
 

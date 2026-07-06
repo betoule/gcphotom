@@ -9,12 +9,16 @@ import time
 import numpy as np
 import matplotlib
 
-for _backend in ("Qt5Agg", "QtAgg", "TkAgg", "Agg"):
-    try:
-        matplotlib.use(_backend, force=True)
-        break
-    except (ImportError, ValueError):
-        continue
+# Test backends by trying to load their modules before importing pyplot.
+# This avoids the lazy-load failure where use() succeeds at registration
+# but fails later when creating a figure.
+import importlib.util as _util
+
+_has_tk = _util.find_spec("tkinter") is not None
+if _has_tk:
+    matplotlib.use("TkAgg")
+else:
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from astropy.wcs import WCS
 from functools import partial
@@ -25,7 +29,7 @@ import galsim as gs
 
 # --- Parameters ------------------------------------------------------------
 
-shape = (512, 512)
+shape = (1024, 1024)
 ny, nx = shape
 zeropoint = 25.0
 gamma = 3.0
@@ -64,27 +68,61 @@ markers = {"phot": "o", "FFT": "s"}
 
 
 def simulate_image_galsim(
-    catalog, shape, gamma, alpha, background, read_noise, method="phot", rng=None
+    catalog,
+    shape,
+    gamma,
+    alpha,
+    background,
+    read_noise,
+    method="phot",
+    rng=None,
+    max_phot_sources=2000,
 ):
-    """Simulate an image using GalSim with a constant background and read noise."""
-    ny, nx = shape
-    profiles = []
-    for row in catalog:
-        flux = float(row["flux"])
-        if flux <= 0:
-            continue
-        moffat = gs.Moffat(beta=alpha, scale_radius=gamma, flux=flux)
-        x = float(row["x"]) - nx / 2.0 + 0.5
-        y = float(row["y"]) - ny / 2.0 + 0.5
-        moffat = moffat.shift(dx=x, dy=y)
-        profiles.append(moffat)
-    scene = gs.Add(profiles)
+    """Simulate an image using GalSim with a constant background and read noise.
 
+    For photon shooting with many sources, sources are batched to avoid
+    GalSim's O(n_sources × n_photons) memory allocation in Sum._shoot.
+    """
+    ny, nx = shape
     kwargs = dict(nx=nx, ny=ny, scale=1.0, dtype=np.float32)
     if method == "phot":
         kwargs["rng"] = rng
+
     t0 = time.perf_counter()
-    image = scene.drawImage(method=method, **kwargs)
+
+    if method == "phot" and len(catalog) > max_phot_sources:
+        n_batches = (len(catalog) + max_phot_sources - 1) // max_phot_sources
+        result = None
+        for i in range(n_batches):
+            batch = catalog[i * max_phot_sources : (i + 1) * max_phot_sources]
+            profiles = []
+            for row in batch:
+                flux = float(row["flux"])
+                if flux <= 0:
+                    continue
+                moffat = gs.Moffat(beta=alpha, scale_radius=gamma, flux=flux)
+                x = float(row["x"]) - nx / 2.0 + 0.5
+                y = float(row["y"]) - ny / 2.0 + 0.5
+                moffat = moffat.shift(dx=x, dy=y)
+                profiles.append(moffat)
+            scene = gs.Add(profiles)
+            batch_img = scene.drawImage(method=method, **kwargs)
+            result = batch_img if result is None else result + batch_img
+        image = result
+    else:
+        profiles = []
+        for row in catalog:
+            flux = float(row["flux"])
+            if flux <= 0:
+                continue
+            moffat = gs.Moffat(beta=alpha, scale_radius=gamma, flux=flux)
+            x = float(row["x"]) - nx / 2.0 + 0.5
+            y = float(row["y"]) - ny / 2.0 + 0.5
+            moffat = moffat.shift(dx=x, dy=y)
+            profiles.append(moffat)
+        scene = gs.Add(profiles)
+        image = scene.drawImage(method=method, **kwargs)
+
     dt = time.perf_counter() - t0
 
     image.array[:] += background
