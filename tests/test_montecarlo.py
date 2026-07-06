@@ -175,6 +175,58 @@ class TestMonteCarlo:
         assert len(results) == 0
 
 
+class TestApertureEstimator:
+    """Edge cases for the aperture estimator."""
+
+    def test_too_few_valid_sources(self, mc_config, sim_data):
+        """When valid.sum() < 5, return NaN fluxes."""
+        image, catalog = sim_data
+        seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
+            image, n_pixels=mc_config.n_pixels
+        )
+        detections = {
+            "seg": seg,
+            "det_cat": det_cat,
+            "bkg_map": bkg_map,
+            "bkg_var_map": bkg_var_map,
+        }
+        cog = gcp.extract_growth_curves(
+            image,
+            det_cat,
+            segmentation_image=seg,
+            background_variance=bkg_var_map,
+            show_progress=False,
+        )
+        # Corrupt the COG to force valid.sum() < 5
+        cog_orig = cog["flux_clean"].copy()
+        cog["flux_clean"] = np.full_like(cog["flux_clean"], np.nan)
+        result = gcp.montecarlo.aperture_estimator(image, detections, cog)
+        assert np.all(np.isnan(result["best_fit"]["flux"]))
+        cog["flux_clean"] = cog_orig
+
+    def test_ac_out_of_range(self, mc_config, sim_data):
+        """When aperture correction is out of [1, 5], clamp to large_ratio."""
+        image, catalog = sim_data
+        seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
+            image, n_pixels=mc_config.n_pixels
+        )
+        detections = {
+            "seg": seg,
+            "det_cat": det_cat,
+            "bkg_map": bkg_map,
+            "bkg_var_map": bkg_var_map,
+        }
+        cog = gcp.extract_growth_curves(
+            image,
+            det_cat,
+            segmentation_image=seg,
+            background_variance=bkg_var_map,
+            show_progress=False,
+        )
+        result = gcp.montecarlo.aperture_estimator(image, detections, cog)
+        assert np.isfinite(result["best_fit"]["flux"]).any()
+
+
 class TestComputeFluxBias:
     def test_bias_is_reasonable(self, mc_results):
         mc, _ = mc_results
@@ -182,9 +234,14 @@ class TestComputeFluxBias:
         bias = stats["GC"]["bias"]
         assert np.any(np.abs(bias) < 50)
 
+    def test_auto_estimators(self, mc_results):
+        mc, _ = mc_results
+        stats = gcp.montecarlo.compute_flux_bias(mc.results, nbins=3)
+        assert "GC" in stats
 
-class TestPlotFluxBias:
-    def test_returns_axes(self, mc_results, tmp_path):
+
+class TestPlotFunctions:
+    def test_plot_flux_bias_returns_axes(self, mc_results, tmp_path):
         mc, _ = mc_results
         stats = gcp.montecarlo.compute_flux_bias(mc.results, estimators=["GC"], nbins=3)
 
@@ -196,8 +253,41 @@ class TestPlotFluxBias:
         ax = gcp.montecarlo.plot_flux_bias(stats)
         assert ax is not None
         fig = ax.get_figure()
-        fig.savefig(str(tmp_path / "test_plot.png"))
+        fig.savefig(str(tmp_path / "test_flux_bias.png"))
         plt.close(fig)
+
+    def test_plot_scalar_bias_returns_axes(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        axes = gcp.montecarlo.plot_scalar_bias(mc.results)
+        assert len(axes) > 0
+        fig = axes[0].get_figure()
+        fig.savefig(str(tmp_path / "test_scalar_bias.png"))
+        plt.close(fig)
+
+    def test_plot_estimation_times_returns_axes(self, mc_results, tmp_path):
+        mc, _ = mc_results
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        ax = gcp.montecarlo.plot_estimation_times(mc.results)
+        assert ax is not None
+        fig = ax.get_figure()
+        fig.savefig(str(tmp_path / "test_est_times.png"))
+        plt.close(fig)
+
+
+class TestMonteCarloRunVerbose:
+    def test_verbose_mode(self, mc_config):
+        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=1, seed=42)
+        results = mc.run(verbose=True, show_progress=False)
+        assert len(results) > 0
 
 
 class TestSaveLoad:
