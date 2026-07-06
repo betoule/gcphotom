@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 from astropy.table import Table
 from gcphotom.aperture import (
+    _pixel_deconvol,
+    _extract_single_growth_curve,
+    _extract_single_growth_curve_sinc,
     detect_and_segment,
     extract_growth_curves,
-    _extract_single_growth_curve,
 )
 from gcphotom.simulator import make_realistic_source_catalog, simulate_image
 
@@ -48,6 +50,22 @@ class TestExtractSingleGrowthCurve:
             img, (cat["x"][0], cat["y"][0]), radii, error=error
         )
         assert np.all(perr > 0)
+
+    def test_sinc_single_source(self, simple_image):
+        img, cat = simple_image
+        radii = np.arange(1, 15, 2.0)
+        deconv = _pixel_deconvol(img)
+        profile, pvar, clean, cont = _extract_single_growth_curve_sinc(
+            deconv,
+            (cat["x"][0], cat["y"][0]),
+            radii,
+            n=None,
+        )
+        assert np.all(np.diff(profile) > 0)
+        assert len(profile) == len(radii)
+        assert np.all(pvar >= 0)
+        assert np.allclose(clean, profile)
+        assert np.allclose(cont, 0.0)
 
 
 class TestExtractGrowthCurves:
@@ -227,6 +245,32 @@ class TestExtractGrowthCurvesWithSegmentation:
             img - 100,
             np.column_stack([cat.x_centroid, cat.y_centroid]),
             background_variance=bkg_var,
+            show_progress=False,
+        )
+        assert np.all(result["background_var"] > 0)
+
+    def test_photutils_fallback(self, controlled_catalog):
+        img = controlled_catalog([(100, 100)])
+        seg, cat, _, _ = detect_and_segment(img, background=100)
+        pos = np.column_stack([cat.x_centroid, cat.y_centroid])
+        result_sinc = extract_growth_curves(
+            img - 100, pos, show_progress=False, method="sinc"
+        )
+        result_phot = extract_growth_curves(
+            img - 100, pos, show_progress=False, method="photutils"
+        )
+        assert set(result_sinc) == set(result_phot)
+        assert result_sinc["flux_clean"].shape == result_phot["flux_clean"].shape
+
+    def test_scalar_background_variance(self, controlled_catalog):
+        img = controlled_catalog([(100, 100)])
+        cat = make_realistic_source_catalog(5, seed=42)
+        cat["x"] = np.linspace(30, 80, 5)
+        cat["y"] = np.linspace(30, 80, 5)
+        result = extract_growth_curves(
+            img,
+            np.column_stack([cat["x"], cat["y"]]),
+            background_variance=25.0,
             show_progress=False,
         )
         assert np.all(result["background_var"] > 0)

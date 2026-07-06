@@ -183,6 +183,13 @@ class TestFitterHelpers:
         assert ax2 is not None
         plt.close("all")
 
+    def test_plot_psf_with_true_params(self, small_sim_fitted):
+        f, bf, _, _ = small_sim_fitted
+        ax1, ax2 = f.plot_PSF(bf, gamma_true=2.5, alpha_true=3.0)
+        assert ax1 is not None
+        assert ax2 is not None
+        plt.close("all")
+
 
 class TestRobustLoss:
     def test_loss_functions(self):
