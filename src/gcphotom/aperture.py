@@ -223,7 +223,7 @@ def extract_growth_curves(
     segmentation_image=None,
     show_progress=True,
     desc="Extracting",
-    method="photutils",
+    method="sinc",
 ):
     """Extract circular growth curves for multiple sources.
 
@@ -253,11 +253,11 @@ def extract_growth_curves(
         If ``True``, display a progress bar during extraction.
     desc : str
         Label for the progress bar.
-    method : {"photutils", "sinc"}
-        Extraction method.  ``"photutils"`` (default) uses
+    method : {"sinc", "photutils"}
+        Extraction method.  ``"sinc"`` (default) uses the Bickerton &
+        Lupton sinc-interpolated aperture photometry, which corrects
+        for pixelisation bias in small apertures.  ``"photutils"`` uses
         `~photutils.profiles.CurveOfGrowth` (geometric pixel overlap).
-        ``"sinc"`` uses the Bickerton & Lupton sinc-interpolated aperture
-        photometry, which corrects for pixelisation bias in small apertures.
 
     Returns
     -------
