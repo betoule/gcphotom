@@ -6,10 +6,146 @@ from photutils.segmentation import (
     deblend_sources,
     SourceCatalog,
 )
+from scipy.special import j1
 from tqdm.auto import tqdm
 
 from .background import estimate_background
 from .match import cross_match as _cross_match  # re-export for backward compat
+
+
+def _pixel_deconvol(image):
+    """Deconvolve image from the pixel window function (sinc⁻¹ in Fourier domain).
+
+    This converts pixel-integrated flux back to Dirac samples of the underlying
+    band-limited continuous function, as required by the Bickerton & Lupton
+    sinc-interpolated aperture photometry method.
+    """
+    nx, ny = image.shape[1], image.shape[0]
+    KX = np.fft.fftfreq(nx, 1)
+    KY = np.fft.fftfreq(ny, 1)
+    kx, ky = np.meshgrid(KX, KY)
+    pwf = np.sinc(kx) * np.sinc(ky)
+    I = np.fft.fft2(image)
+    return np.real(np.fft.ifft2(I / pwf))
+
+
+def _sinc_freqs(n):
+    """Frequency coordinates for an n×n array."""
+    KX = np.fft.fftfreq(n, 1)
+    kx, ky = np.meshgrid(KX, KX)
+    k = np.sqrt(kx * kx + ky * ky)
+    return kx, ky, k
+
+
+def _sinc_weights(n, radius, dx, dy):
+    """Real-space weight map for a sinc-integrated circular aperture.
+
+    Parameters
+    ----------
+    n : int
+        Size of the square weight map.
+    radius : float
+        Aperture radius in pixels.
+    dx, dy : float
+        Sub-pixel offset of the aperture centre from the vignette centre,
+        in the range [-0.5, 0.5].
+
+    Returns
+    -------
+    wij : 2D `~numpy.ndarray`
+        n×n array of weights.  ``flux = Σ(wij * vignette)``.
+    """
+    kx, ky, k = _sinc_freqs(n)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        airy = radius * j1(2.0 * np.pi * radius * k) / k
+    airy[0, 0] = np.pi * radius * radius
+    phase = np.exp(-1.0j * 2.0 * np.pi * (dx * kx + dy * ky))
+    wij = np.fft.ifft2(phase * airy)
+    return np.fft.fftshift(wij).real
+
+
+def _extract_single_growth_curve_sinc(
+    image_deconv,
+    position,
+    radii,
+    variance=None,
+    seg_data=None,
+    source_label=None,
+    n=None,
+):
+    """Extract a circular growth curve for one source via the sinc method.
+
+    Parameters
+    ----------
+    image_deconv : 2D `~numpy.ndarray`
+        Image deconvolved from the pixel window function via
+        :func:`_pixel_deconvol`.
+    position : tuple of float
+        ``(x, y)`` pixel coordinate of the source centre.
+    radii : 1D `~numpy.ndarray`
+        Aperture radii in pixels.
+    variance : 2D `~numpy.ndarray` or None
+        Per-pixel variance map (same shape as ``image_deconv``).
+    seg_data : 2D `~numpy.ndarray` of int or None
+        Segmentation map where each pixel holds the label of its source
+        (0 = background).  If provided, contamination from other sources is
+        estimated.
+    source_label : int or None
+        Label of this source in ``seg_data``.
+    n : int or None
+        Size of the square vignette.  If ``None``, defaults to
+        ``max(32, 2 * int(max(radii)) + 1)``.
+
+    Returns
+    -------
+    profile : 1D `~numpy.ndarray`
+        Cumulative flux at each radius.
+    profile_var : 1D `~numpy.ndarray`
+        Cumulative background variance at each radius.
+    clean_profile : 1D `~numpy.ndarray`
+        Cumulative flux with neighbouring sources removed.
+    contamination : 1D `~numpy.ndarray`
+        Cumulative contamination from neighbours.
+    """
+    x, y = position
+    ix, iy = int(x), int(y)
+    dx, dy = x - ix, y - iy
+
+    if n is None:
+        n = max(32, 2 * int(max(radii)) + 1)
+
+    half = n // 2
+    ys = slice(iy - half, iy - half + n)
+    xs = slice(ix - half, ix - half + n)
+
+    V = image_deconv[ys, xs]
+    W = variance[ys, xs] if variance is not None else None
+
+    if seg_data is not None and source_label is not None:
+        O = seg_data[ys, xs]
+        other_mask = (O != 0) & (O != source_label)
+    else:
+        other_mask = None
+
+    n_radii = len(radii)
+    profile = np.zeros(n_radii)
+    profile_var = np.zeros(n_radii)
+    clean_profile = np.zeros(n_radii)
+    contamination = np.zeros(n_radii)
+
+    for i, r in enumerate(radii):
+        wij = _sinc_weights(n, r, dx, dy)
+        profile[i] = (wij * V).sum()
+        if W is not None:
+            profile_var[i] = ((wij**2) * W).sum()
+        if other_mask is not None:
+            others = wij * V * other_mask
+            contamination[i] = others.sum()
+            clean_profile[i] = profile[i] - contamination[i]
+        else:
+            clean_profile[i] = profile[i]
+
+    return profile, profile_var, clean_profile, contamination
 
 
 def _extract_single_growth_curve(image, position, radii, error=None, mask=None):
@@ -87,6 +223,7 @@ def extract_growth_curves(
     segmentation_image=None,
     show_progress=True,
     desc="Extracting",
+    method="photutils",
 ):
     """Extract circular growth curves for multiple sources.
 
@@ -116,6 +253,11 @@ def extract_growth_curves(
         If ``True``, display a progress bar during extraction.
     desc : str
         Label for the progress bar.
+    method : {"photutils", "sinc"}
+        Extraction method.  ``"photutils"`` (default) uses
+        `~photutils.profiles.CurveOfGrowth` (geometric pixel overlap).
+        ``"sinc"`` uses the Bickerton & Lupton sinc-interpolated aperture
+        photometry, which corrects for pixelisation bias in small apertures.
 
     Returns
     -------
@@ -140,10 +282,6 @@ def extract_growth_curves(
     positions = _as_positions(sources)
     n_sources = len(positions)
     n_radii = len(radii)
-    flux = np.zeros((n_sources, n_radii))
-    background_var = np.zeros((n_sources, n_radii))
-    flux_clean = np.zeros((n_sources, n_radii))
-    contamination = np.zeros((n_sources, n_radii))
 
     if background_variance is None:
         _, bkg_var = estimate_background(image)
@@ -151,10 +289,32 @@ def extract_growth_curves(
     elif np.isscalar(background_variance):
         background_variance = np.full_like(image, background_variance, dtype=float)
 
-    error = np.sqrt(background_variance)
-
     if segmentation_image is not None:
         seg_data = segmentation_image.data
+    else:
+        seg_data = None
+
+    if method == "sinc":
+        return _extract_growth_curves_sinc(
+            image,
+            positions,
+            radii,
+            background_variance,
+            seg_data,
+            segmentation_image,
+            show_progress,
+            desc,
+            n_sources,
+            n_radii,
+        )
+
+    # --- photutils method (default) ---
+    flux = np.zeros((n_sources, n_radii))
+    background_var = np.zeros((n_sources, n_radii))
+    flux_clean = np.zeros((n_sources, n_radii))
+    contamination = np.zeros((n_sources, n_radii))
+
+    error = np.sqrt(background_variance)
 
     for i, pos in tqdm(
         enumerate(positions),
@@ -179,6 +339,79 @@ def extract_growth_curves(
             contamination[i] = profile - clean_profile
         else:
             flux_clean[i] = profile
+
+    return {
+        "radius": radii,
+        "flux": flux,
+        "background_var": background_var,
+        "flux_clean": flux_clean,
+        "contamination": contamination,
+    }
+
+
+def _extract_growth_curves_sinc(
+    image,
+    positions,
+    radii,
+    variance,
+    seg_data,
+    segmentation_image,
+    show_progress,
+    desc,
+    n_sources,
+    n_radii,
+):
+    """Extract growth curves via the Bickerton & Lupton sinc method."""
+    # Fill NaN so the FFT in pixel_deconvol does not spread them.
+    fill = np.nanmedian(image)
+    image_clean = np.where(np.isfinite(image), image, fill)
+    I = _pixel_deconvol(image_clean)
+
+    n_vig = max(32, 2 * int(max(radii)) + 1)
+
+    flux = np.empty((n_sources, n_radii))
+    background_var = np.empty((n_sources, n_radii))
+    flux_clean = np.empty((n_sources, n_radii))
+    contamination = np.zeros((n_sources, n_radii))
+
+    for i, pos in tqdm(
+        enumerate(positions),
+        total=n_sources,
+        desc=desc,
+        disable=not show_progress,
+        unit="src",
+        leave=False,
+    ):
+        x, y = pos
+        ix, iy = int(x), int(y)
+        half = n_vig // 2
+
+        if (
+            (ix - half < 0)
+            or (ix - half + n_vig > image.shape[1])
+            or (iy - half < 0)
+            or (iy - half + n_vig > image.shape[0])
+        ):
+            flux[i] = np.nan
+            background_var[i] = np.nan
+            flux_clean[i] = np.nan
+            contamination[i] = np.nan
+            continue
+
+        label = segmentation_image.labels[i] if segmentation_image is not None else None
+        p, pv, cp, ct = _extract_single_growth_curve_sinc(
+            I,
+            pos,
+            radii,
+            variance=variance,
+            seg_data=seg_data,
+            source_label=label,
+            n=n_vig,
+        )
+        flux[i] = p
+        background_var[i] = pv
+        flux_clean[i] = cp
+        contamination[i] = ct
 
     return {
         "radius": radii,
