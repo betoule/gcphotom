@@ -588,6 +588,20 @@ def plot_flux_bias(bias_stats, figsize=(7, 5)):
     return ax
 
 
+def _estimators_with_scalar(results, param):
+    """Return names of estimators in *results* that have scalar *param*."""
+    names = set()
+    for r in results:
+        for k, v in r.items():
+            if k in ("sim_cat", "det_cat", "params"):
+                continue
+            bf = v.get("best_fit", {})
+            p = bf.get(param)
+            if p is not None and not hasattr(p, "__len__"):
+                names.add(k)
+    return sorted(names)
+
+
 def plot_scalar_bias(results, params=("gamma", "alpha"), figsize=None):
     """Per-realisation estimates of scalar parameters for each estimator.
 
@@ -616,17 +630,19 @@ def plot_scalar_bias(results, params=("gamma", "alpha"), figsize=None):
     if n == 1:
         axes = [axes]
 
-    colors = {
-        "GC": "k",
-        "GC (fixed back)": "r",
-        "PSF": "b",
-        "Aperture + AC": "m",
-    }
+    # Default colour sequence used when no colour is assigned to an estimator.
+    _default_colors = ["k", "r", "b", "m", "g", "c", "y", "orange"]
 
     for ax, param in zip(axes, params):
         true_val = getattr(results[0]["params"], param)
+        names = _estimators_with_scalar(results, param)
 
-        for idx, name in enumerate(colors):
+        if not names:
+            ax.set_ylabel(param)
+            ax.set_title(f"{param} — true = {true_val:.2f}")
+            continue
+
+        for idx, name in enumerate(names):
             vals, errs = [], []
             for r in results:
                 bf = r.get(name, {}).get("best_fit", {})
@@ -638,9 +654,7 @@ def plot_scalar_bias(results, params=("gamma", "alpha"), figsize=None):
                         float(se.get(param, 0.0)) if isinstance(se, dict) else 0.0
                     )
 
-            if not vals:
-                continue
-
+            color = _default_colors[idx % len(_default_colors)]
             x = np.full(len(vals), idx) + np.random.default_rng(42).uniform(
                 -0.15, 0.15, len(vals)
             )
@@ -649,14 +663,14 @@ def plot_scalar_bias(results, params=("gamma", "alpha"), figsize=None):
                 vals,
                 yerr=errs,
                 fmt="o",
-                color=colors[name],
+                color=color,
                 alpha=0.5,
                 markersize=3,
                 capsize=0,
             )
 
-        ax.set_xticks(range(len(colors)))
-        ax.set_xticklabels(list(colors.keys()), rotation=20, ha="right", fontsize=8)
+        ax.set_xticks(range(len(names)))
+        ax.set_xticklabels(names, rotation=20, ha="right", fontsize=8)
         ax.axhline(true_val, color="gray", ls="--", alpha=0.7)
         ax.set_ylabel(param)
         ax.set_title(f"{param} — true = {true_val:.2f}")
