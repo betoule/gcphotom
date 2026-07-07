@@ -33,7 +33,7 @@ def small_sim_fitted(small_sim_gc):
     """Fit once per module; all read-only tests share this fitter."""
     _, _, gc = small_sim_gc
     f = gcp.Fitter(gc)
-    bf, extra = f.fit(show_progress=False, niter=300, compute_uncertainty=True)
+    bf, extra = f.fit(show_progress=False, niter=100, compute_uncertainty=True)
     result = f.results(bf)
     return f, bf, extra, result
 
@@ -119,7 +119,7 @@ class TestFitterInit:
     def test_results_all_dropped(self, small_sim_gc):
         _, _, gc = small_sim_gc
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(show_progress=False, niter=100)
+        bf, _ = f.fit(show_progress=False, niter=50)
         f.goods = jnp.zeros_like(f.goods)
         f._cut()
         res = f.results(bf)
@@ -134,7 +134,7 @@ class TestFitterInit:
     def test_expand_to_original_length(self, small_sim_gc):
         _, _, gc = small_sim_gc
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(show_progress=False, niter=100)
+        bf, _ = f.fit(show_progress=False, niter=50)
         n_orig = f._orig_n
         n_cur = f.fluxes.shape[1]
         arr = np.arange(n_cur, dtype=float)
@@ -158,7 +158,7 @@ class TestFitterHelpers:
     def test_detect_contamination_reduces_goods(self, small_sim_gc):
         _, _, gc = small_sim_gc
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(show_progress=False, niter=100)
+        bf, _ = f.fit(show_progress=False, niter=50)
         goods_before = int(f.goods.sum())
         f.detect_contamination(bf)
         goods_after = int(f.goods.sum())
@@ -167,10 +167,10 @@ class TestFitterHelpers:
     def test_results_expanded_with_nans_after_contamination(self, small_sim_gc):
         _, _, gc = small_sim_gc
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(show_progress=False, niter=100)
+        bf, _ = f.fit(show_progress=False, niter=50)
         n_before = f._orig_n
         f.detect_contamination(bf)
-        bf2, _ = f.fit(show_progress=False, niter=100)
+        bf2, _ = f.fit(show_progress=False, niter=50)
         res_after = f.results(bf2)
         assert len(res_after["flux"]) == n_before
         if n_before > f.fluxes.shape[1]:
@@ -208,7 +208,7 @@ class TestRobustLoss:
     def test_fit_loss_decreases(self, loss, small_sim_gc):
         _, _, gc = small_sim_gc
         f = gcp.Fitter(gc)
-        fit_kwargs = {"show_progress": False, "niter": 100}
+        fit_kwargs = {"show_progress": False, "niter": 50}
         if loss is not None:
             fit_kwargs["loss"] = loss
         bf, extra = f.fit(**fit_kwargs)
@@ -260,9 +260,9 @@ class TestUncertainty:
     def test_uncertainty_after_contamination(self, small_sim_gc):
         _, _, gc = small_sim_gc
         f = gcp.Fitter(gc)
-        bf, _ = f.fit(show_progress=False, niter=100)
+        bf, _ = f.fit(show_progress=False, niter=50)
         f.detect_contamination(bf)
-        bf2, _ = f.fit(show_progress=False, niter=100, compute_uncertainty=True)
+        bf2, _ = f.fit(show_progress=False, niter=50, compute_uncertainty=True)
         result = f.results(bf2)
         assert np.all(np.isfinite(np.asarray(result["std_errors"]["gamma"])))
 

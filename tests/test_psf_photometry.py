@@ -22,7 +22,7 @@ class TestAsXY:
 
 
 class TestPSFPhotometry:
-    @pytest.fixture
+    @pytest.fixture(scope="module")
     def image_and_sources(self):
         image, sim_cat = gcp.simulate_image(n_sources=30, seed=42)
         seg, det_cat, _, _ = gcp.detect_and_segment(image, n_pixels=5)

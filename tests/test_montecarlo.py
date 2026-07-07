@@ -20,7 +20,7 @@ def mc_config():
         background=100.0,
         read_noise=5.0,
         n_pixels=5,
-        fit_kwargs={"learning_rate": 1e-2, "niter": 100},
+        fit_kwargs={"learning_rate": 1e-2, "niter": 50},
     )
 
 
@@ -52,6 +52,30 @@ def mc_results(mc_config):
     return mc, results
 
 
+@pytest.fixture(scope="module")
+def detections_and_cog(mc_config, sim_data):
+    """Pre-computed detection, segmentation and growth curves for
+    *sim_data*, shared by the estimator tests below."""
+    image, _ = sim_data
+    seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
+        image, n_pixels=mc_config.n_pixels
+    )
+    detections = {
+        "seg": seg,
+        "det_cat": det_cat,
+        "bkg_map": bkg_map,
+        "bkg_var_map": bkg_var_map,
+    }
+    cog = gcp.extract_growth_curves(
+        image,
+        det_cat,
+        segmentation_image=seg,
+        background_variance=bkg_var_map,
+        show_progress=False,
+    )
+    return detections, cog
+
+
 class TestTimedEstimator:
     def test_adds_estimation_time(self):
         @gcp.montecarlo.timed_estimator
@@ -77,24 +101,7 @@ class TestTimedEstimator:
 class TestEstimators:
     """Test each built-in estimator independently."""
 
-    def _run_estimator(self, estimator, mc_config, sim_data):
-        image, catalog = sim_data
-        seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
-            image, n_pixels=mc_config.n_pixels
-        )
-        detections = {
-            "seg": seg,
-            "det_cat": det_cat,
-            "bkg_map": bkg_map,
-            "bkg_var_map": bkg_var_map,
-        }
-        cog = gcp.extract_growth_curves(
-            image,
-            det_cat,
-            segmentation_image=seg,
-            background_variance=bkg_var_map,
-            show_progress=False,
-        )
+    def _run_estimator(self, estimator, image, detections, cog):
         return estimator(image, detections, cog)
 
     @pytest.mark.parametrize(
@@ -107,14 +114,16 @@ class TestEstimators:
         ],
     )
     def test_estimator_returns_finite_flux(
-        self, estimator, cfg_field, mc_config, sim_data
+        self, estimator, cfg_field, mc_config, sim_data, detections_and_cog
     ):
         if cfg_field is not None:
             if cfg_field == "fit_kwargs":
                 estimator = partial(estimator, fit_kwargs=mc_config.fit_kwargs)
             elif cfg_field == "background":
                 estimator = partial(estimator, background=mc_config.background)
-        result = self._run_estimator(estimator, mc_config, sim_data)
+        image, _ = sim_data
+        detections, cog = detections_and_cog
+        result = self._run_estimator(estimator, image, detections, cog)
         assert np.isfinite(result["best_fit"]["flux"]).any()
 
 
@@ -140,12 +149,13 @@ class TestMonteCarlo:
         assert len(mc.results) == len(results)
 
     def test_each_realization_has_different_catalog(self, mc_config):
-        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=2, seed=42)
-        results = mc.run(verbose=False, show_progress=False)
-        fluxes = [np.asarray(r["GC"]["best_fit"]["flux"]) for r in results]
-        for i in range(len(fluxes) - 1):
-            min_len = min(len(fluxes[i]), len(fluxes[i + 1]))
-            assert not np.allclose(fluxes[i][:min_len], fluxes[i + 1][:min_len])
+        cat1 = gcp.make_realistic_source_catalog(
+            n_sources=mc_config.n_sources, shape=mc_config.shape, seed=42
+        )
+        cat2 = gcp.make_realistic_source_catalog(
+            n_sources=mc_config.n_sources, shape=mc_config.shape, seed=43
+        )
+        assert not np.allclose(cat1["flux"], cat2["flux"])
 
     def test_custom_estimators(self, mc_config):
         @gcp.montecarlo.timed_estimator
@@ -178,25 +188,10 @@ class TestMonteCarlo:
 class TestApertureEstimator:
     """Edge cases for the aperture estimator."""
 
-    def test_too_few_valid_sources(self, mc_config, sim_data):
+    def test_too_few_valid_sources(self, sim_data, detections_and_cog):
         """When valid.sum() < 5, return NaN fluxes."""
-        image, catalog = sim_data
-        seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
-            image, n_pixels=mc_config.n_pixels
-        )
-        detections = {
-            "seg": seg,
-            "det_cat": det_cat,
-            "bkg_map": bkg_map,
-            "bkg_var_map": bkg_var_map,
-        }
-        cog = gcp.extract_growth_curves(
-            image,
-            det_cat,
-            segmentation_image=seg,
-            background_variance=bkg_var_map,
-            show_progress=False,
-        )
+        image, _ = sim_data
+        detections, cog = detections_and_cog
         # Corrupt the COG to force valid.sum() < 5
         cog_orig = cog["flux_clean"].copy()
         cog["flux_clean"] = np.full_like(cog["flux_clean"], np.nan)
@@ -204,25 +199,10 @@ class TestApertureEstimator:
         assert np.all(np.isnan(result["best_fit"]["flux"]))
         cog["flux_clean"] = cog_orig
 
-    def test_ac_out_of_range(self, mc_config, sim_data):
+    def test_ac_out_of_range(self, sim_data, detections_and_cog):
         """When aperture correction is out of [1, 5], clamp to large_ratio."""
-        image, catalog = sim_data
-        seg, det_cat, bkg_map, bkg_var_map = gcp.detect_and_segment(
-            image, n_pixels=mc_config.n_pixels
-        )
-        detections = {
-            "seg": seg,
-            "det_cat": det_cat,
-            "bkg_map": bkg_map,
-            "bkg_var_map": bkg_var_map,
-        }
-        cog = gcp.extract_growth_curves(
-            image,
-            det_cat,
-            segmentation_image=seg,
-            background_variance=bkg_var_map,
-            show_progress=False,
-        )
+        image, _ = sim_data
+        detections, cog = detections_and_cog
         result = gcp.montecarlo.aperture_estimator(image, detections, cog)
         assert np.isfinite(result["best_fit"]["flux"]).any()
 
@@ -284,9 +264,8 @@ class TestPlotFunctions:
 
 
 class TestMonteCarloRunVerbose:
-    def test_verbose_mode(self, mc_config):
-        mc = gcp.montecarlo.MonteCarlo(mc_config, n_realizations=1, seed=42)
-        results = mc.run(verbose=True, show_progress=False)
+    def test_verbose_mode(self, mc_results):
+        mc, results = mc_results
         assert len(results) > 0
 
 

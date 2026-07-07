@@ -33,7 +33,7 @@ class TestSimulateImage:
         assert img.shape == (128, 128)
 
     def test_auto_generate_catalog(self):
-        img, cat = simulate_image(seed=42)
+        img, cat = simulate_image(shape=(128, 128), n_sources=10, seed=42)
         assert img.ndim == 2
         assert len(cat) > 0
 
