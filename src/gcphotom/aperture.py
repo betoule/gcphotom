@@ -6,7 +6,7 @@ from photutils.segmentation import (
     deblend_sources,
     SourceCatalog,
 )
-from scipy.special import j1
+from scipy.special import j1  # pylint: disable=no-name-in-module
 from tqdm.auto import tqdm
 
 from .background import estimate_background
