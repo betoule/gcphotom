@@ -104,23 +104,38 @@ def gc_estimator(image, detections, cog, fit_kwargs=None):
 
 @timed_estimator
 def gc_fixed_back_estimator(image, detections, cog, fit_kwargs=None):
-    """Two-step growth-curve fit with background fixed to the mean
-    fitted value of the free-background fit."""
+    """Two-step growth-curve fit with background fixed to the detection
+    background map."""
     fit_kwargs = fit_kwargs or {}
-    fitter = gcp.Fitter(cog, bads=_bads(detections["det_cat"]))
-    bf, _ = fitter.fit(**fit_kwargs, desc="GC fix back (1)")
-    fitter.detect_contamination(bf)
-    bf, _ = fitter.fit(**fit_kwargs, compute_uncertainty=True, desc="GC fix back (2)")
-    rp = fitter.rescale_params(bf)
-    mean_back = float(np.mean(rp["back"]))
-    n_cur = fitter.fluxes.shape[1]
-    bf_fixed, _ = fitter.fit(
-        **fit_kwargs,
-        fix={"back": np.full(n_cur, mean_back)},
-        compute_uncertainty=True,
-        desc="GC fix back (3)",
+
+    # Extract background from the detection background map at each
+    # source position.
+    bkg_map = detections["bkg_map"]
+    det_cat = detections["det_cat"]
+    x = np.clip(
+        np.round(np.asarray(det_cat.x_centroid)).astype(int), 0, bkg_map.shape[1] - 1
     )
-    fitted = fitter.results(bf_fixed)
+    y = np.clip(
+        np.round(np.asarray(det_cat.y_centroid)).astype(int), 0, bkg_map.shape[0] - 1
+    )
+    bkg_local = np.asarray(bkg_map[y, x], dtype=float)
+
+    fitter = gcp.Fitter(cog, bads=_bads(det_cat))
+    back_fixed = bkg_local[fitter.kept]
+
+    bf, _ = fitter.fit(**fit_kwargs, fix={"back": back_fixed}, desc="GC fixed back (1)")
+    bf["back"] = back_fixed
+    fitter.detect_contamination(bf)
+
+    back_fixed = bkg_local[fitter.kept]
+    bf, _ = fitter.fit(
+        **fit_kwargs,
+        fix={"back": back_fixed},
+        compute_uncertainty=True,
+        desc="GC fixed back (2)",
+    )
+    bf["back"] = back_fixed
+    fitted = fitter.results(bf)
     return {
         "best_fit": fitted,
         "uncertainty": fitted.get("std_errors"),
