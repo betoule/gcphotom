@@ -256,7 +256,7 @@ def aperture_estimator(image, detections, cog):
 
 
 @timed_estimator
-def psf_estimator(image, detections, cog, nstars=30, fit_shape=11):
+def psf_estimator(image, detections, cog, nstars=30, fit_shape=25):
     """PSF photometry estimator."""
     psf_results, _ = gcp.psf_photometry(
         image - detections["bkg_map"],

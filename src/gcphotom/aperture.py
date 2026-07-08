@@ -72,6 +72,7 @@ def _extract_single_growth_curve_sinc(
     seg_data=None,
     source_label=None,
     n=None,
+    sinc_threshold=10.0,
 ):
     """Extract a circular growth curve for one source via the sinc method.
 
@@ -95,6 +96,11 @@ def _extract_single_growth_curve_sinc(
     n : int or None
         Size of the square vignette.  If ``None``, defaults to
         ``max(32, 2 * int(max(radii)) + 1)``.
+    sinc_threshold : float
+        Radii below this value use the FFT-based sinc-interpolated
+        aperture weights (correcting pixelisation bias).  Radii at or
+        above this value use simple geometric weights on the deconvolved
+        image, which are more accurate for large apertures.
 
     Returns
     -------
@@ -112,7 +118,7 @@ def _extract_single_growth_curve_sinc(
     dx, dy = x - ix, y - iy
 
     if n is None:
-        n = max(32, 2 * int(max(radii)) + 1)
+        n = max(32, 2 * int(np.ceil(max(radii))) + 9)
 
     half = n // 2
     ys = slice(iy - half, iy - half + n)
@@ -127,6 +133,9 @@ def _extract_single_growth_curve_sinc(
     else:
         other_mask = None
 
+    # Precompute coordinate mesh for disk weights
+    yy, xx = np.mgrid[:n, :n]
+
     n_radii = len(radii)
     profile = np.zeros(n_radii)
     profile_var = np.zeros(n_radii)
@@ -134,7 +143,11 @@ def _extract_single_growth_curve_sinc(
     contamination = np.zeros(n_radii)
 
     for i, r in enumerate(radii):
-        wij = _sinc_weights(n, r, dx, dy)
+        if r < sinc_threshold:
+            wij = _sinc_weights(n, r, dx, dy)
+        else:
+            rr = np.sqrt((xx - half - dx) ** 2 + (yy - half - dy) ** 2)
+            wij = (rr <= r).astype(float)
         profile[i] = (wij * V).sum()
         if W is not None:
             profile_var[i] = ((wij**2) * W).sum()
@@ -224,6 +237,7 @@ def extract_growth_curves(
     show_progress=True,
     desc="Extracting",
     method="sinc",
+    sinc_threshold=10.0,
 ):
     """Extract circular growth curves for multiple sources.
 
@@ -258,6 +272,12 @@ def extract_growth_curves(
         Lupton sinc-interpolated aperture photometry, which corrects
         for pixelisation bias in small apertures.  ``"photutils"`` uses
         `~photutils.profiles.CurveOfGrowth` (geometric pixel overlap).
+    sinc_threshold : float, optional
+        Ignored when ``method="photutils"``.  For ``method="sinc"``,
+        radii below this value use the FFT-based sinc-interpolated
+        aperture weights; radii at or above this value use simple
+        geometric weights on the pixel-deconvolved image, which are
+        more accurate for large apertures.  Default is 10.0 pixels.
 
     Returns
     -------
@@ -306,6 +326,7 @@ def extract_growth_curves(
             desc,
             n_sources,
             n_radii,
+            sinc_threshold=sinc_threshold,
         )
 
     # --- photutils method (default) ---
@@ -360,6 +381,7 @@ def _extract_growth_curves_sinc(
     desc,
     n_sources,
     n_radii,
+    sinc_threshold=10.0,
 ):
     """Extract growth curves via the Bickerton & Lupton sinc method."""
     # Fill NaN so the FFT in pixel_deconvol does not spread them.
@@ -367,7 +389,7 @@ def _extract_growth_curves_sinc(
     image_clean = np.where(np.isfinite(image), image, fill)
     I = _pixel_deconvol(image_clean)
 
-    n_vig = max(32, 2 * int(max(radii)) + 1)
+    n_vig = max(32, 2 * int(np.ceil(max(radii))) + 9)
 
     flux = np.empty((n_sources, n_radii))
     background_var = np.empty((n_sources, n_radii))
@@ -407,6 +429,7 @@ def _extract_growth_curves_sinc(
             seg_data=seg_data,
             source_label=label,
             n=n_vig,
+            sinc_threshold=sinc_threshold,
         )
         flux[i] = p
         background_var[i] = pv

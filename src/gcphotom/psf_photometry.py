@@ -73,10 +73,10 @@ def psf_photometry(
     sources,
     nstars=20,
     min_separation=15,
-    fit_shape=5,
-    extract_size=11,
+    fit_shape=25,
+    extract_size=51,
     oversampling=1,
-    aperture_radius=5.0,
+    aperture_radius=10.0,
     epsf_maxiters=10,
     background=None,
 ):
@@ -103,13 +103,16 @@ def psf_photometry(
         Minimum separation in pixels for a star to be considered
         "isolated" for ePSF building.
     fit_shape : int
-        Fitting box size (passed to ``PSFPhotometry``).
+        Fitting box size in pixels (passed to ``PSFPhotometry``).
+        Should be large enough to capture most of the PSF flux.
     extract_size : int
-        Cutout size for ePSF star extraction.
+        Cutout size in pixels for ePSF star extraction.
+        Should be large enough to capture the full PSF wings.
     oversampling : int
         ePSF oversampling factor (passed to ``EPSFBuilder``).
     aperture_radius : float
-        Aperture radius for initial flux estimation in ``PSFPhotometry``.
+        Aperture radius in pixels for initial flux estimation in
+        ``PSFPhotometry``.
     epsf_maxiters : int
         Maximum ePSF building iterations.
     background : float, 2D ndarray or None

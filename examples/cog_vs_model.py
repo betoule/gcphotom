@@ -105,6 +105,7 @@ for m in methods:
 ax3.plot(radii, annular_true_scaled, "k-", label="Analytic Moffat", lw=1.5)
 ax3.set_xlabel("Aperture radius [pix]")
 ax3.set_ylabel("Annular flux [ADU]")
+ax3.set_yscale("log")
 ax3.set_title("Annular profile")
 ax3.legend(frameon=False, fontsize=8)
 ax3.grid(True, alpha=0.3)

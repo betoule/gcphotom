@@ -38,7 +38,7 @@ print(f"PSF: gamma={fitted['gamma']:.2f}, alpha={fitted['alpha']:.2f}")
 
 # 7. PSF photometry baseline (empirical PSF)
 psf_results, epsf_res = gcp.psf_photometry(
-    image - 100, det_cat, nstars=30, fit_shape=11
+    image - 100, det_cat, nstars=30, fit_shape=25
 )
 print(f"ePSF: {epsf_res.iterations} iterations, converged={epsf_res.converged}")
 psf_cat = gcp.cross_match(psf_results, sim_cat)

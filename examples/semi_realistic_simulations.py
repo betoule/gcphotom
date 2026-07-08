@@ -125,7 +125,7 @@ fitted_no_back = fitter.results(best_fit_no_back)
 # ------------------------------------------------------------------
 
 psf_results, epsf_res = gcp.psf_photometry(
-    image - np.median(real_image), det_cat[injected_mask], nstars=30, fit_shape=11
+    image - np.median(real_image), det_cat[injected_mask], nstars=30, fit_shape=25
 )
 print(f"ePSF: {epsf_res.iterations} iterations, converged={epsf_res.converged}")
 psf_cat = gcp.cross_match(psf_results, sim_cat)

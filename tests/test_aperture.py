@@ -265,8 +265,8 @@ class TestExtractGrowthCurvesWithSegmentation:
     def test_scalar_background_variance(self, controlled_catalog):
         img = controlled_catalog([(100, 100)])
         cat = make_realistic_source_catalog(5, seed=42)
-        cat["x"] = np.linspace(30, 80, 5)
-        cat["y"] = np.linspace(30, 80, 5)
+        cat["x"] = np.linspace(35, 65, 5)
+        cat["y"] = np.linspace(35, 65, 5)
         result = extract_growth_curves(
             img,
             np.column_stack([cat["x"], cat["y"]]),
