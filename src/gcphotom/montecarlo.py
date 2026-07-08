@@ -399,6 +399,10 @@ class MonteCarlo:
         Function ``f(seed) -> Table`` that generates the source catalog for
         each realization.  Defaults to ``make_realistic_source_catalog``
         configured with *config.n_sources* and *config.shape*.
+    simulate_fn : callable, optional
+        Function ``f(shape, catalog, gamma, alpha, background, read_noise,
+        seed) -> (image, catalog)`` for image simulation.  Defaults to
+        :func:`gcphotom.simulate_image`.
     """
 
     def __init__(
@@ -408,6 +412,7 @@ class MonteCarlo:
         seed: int | None = None,
         estimators: dict | None = None,
         catalog_fn=None,
+        simulate_fn=None,
     ):
         self.config = config
         self.n_realizations = n_realizations
@@ -420,6 +425,7 @@ class MonteCarlo:
                 shape=self.config.shape,
             )
         self._catalog_fn = catalog_fn
+        self._simulate_fn = simulate_fn or gcp.simulate_image
         self._results: list[dict] = []
 
     @property
@@ -460,7 +466,7 @@ class MonteCarlo:
                 print(f"  Realization {i + 1}/{self.n_realizations}")
 
             catalog = self._catalog_fn(seed=int(sd))
-            image, _ = gcp.simulate_image(
+            image, _ = self._simulate_fn(
                 shape=self.config.shape,
                 catalog=catalog,
                 gamma=self.config.gamma,

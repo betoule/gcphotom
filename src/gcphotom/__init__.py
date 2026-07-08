@@ -16,6 +16,7 @@ from gcphotom.simulator import (
     simulate_image,
     make_test_source_catalog,
 )
+from gcphotom.galsim_simulator import simulate_image_galsim
 from gcphotom.gaia_catalog import make_gaia_source_catalog
 
 from . import match, montecarlo  # public submodules
@@ -35,4 +36,5 @@ __all__ = [
     "make_test_source_catalog",
     "match",
     "simulate_image",
+    "simulate_image_galsim",
 ]

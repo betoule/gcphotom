@@ -13,7 +13,11 @@ bads = (det_cat.ellipticity * det_cat.area).value > 6
 
 # 3. Extract growth curves with contamination estimation
 cog = gcp.extract_growth_curves(
-    image, det_cat, segmentation_image=seg, background_variance=bkg_var_map
+    image,
+    det_cat,
+    segmentation_image=seg,
+    background_variance=bkg_var_map,
+    desc="COG",
 )
 
 # 4. Fit all growth curves

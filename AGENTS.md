@@ -32,6 +32,10 @@
 - Tests live under `tests/`.
 - The package is `gcphotom` — import as `import gcphotom as gcp`.
 
+## CLI
+- All CLI interfaces (examples, tools, etc.) must use **typer** — never argparse, click, or raw sys.argv.
+- The existing CLI entry point in `src/gcphotom/cli.py` already uses typer; follow its pattern.
+
 ## Dependencies
 - Core: `jax`, `jaxlib`, `astropy`, `numpy`
 - GPU support requires appropriate JAX backend installation.

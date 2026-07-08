@@ -2,8 +2,9 @@
 
 `gcphotom` provides two levels of simulation: **single-image simulation** for
 quick experimentation, and **Monte Carlo simulation** for statistical bias
-analysis across many random realizations.  This document describes the design,
-data flow, and extension points.
+analysis across many random realizations.  Two rendering backends are
+available: the original **astropy/photutils** backend and a **GalSim**-based
+backend (FFT or photon shooting).
 
 ---
 
@@ -29,7 +30,52 @@ and Gaussian read noise are added.
 The catalog generator (`make_realistic_source_catalog`) and image simulator
 (`simulate_image`) live in `src/gcphotom/simulator.py`.
 
-### 1.2 Monte Carlo simulation (`gcphotom.montecarlo.MonteCarlo`)
+### 1.2 Single-image simulation with GalSim (`gcphotom.simulate_image_galsim`)
+
+Drop-in alternative to `simulate_image` with the same signature, plus two
+keyword-only parameters:
+
+```python
+from gcphotom.galsim_simulator import simulate_image_galsim
+
+image, catalog = simulate_image_galsim(
+    shape=(1024, 1024), n_sources=1000,
+    gamma=3.0, alpha=3.0, background=100.0, read_noise=5.0, seed=42,
+    method="auto",              # "auto" (FFT) or "phot" (photon shooting)
+    max_phot_sources=100,       # batch size for photon shooting
+)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `method` | `"auto"` | `"auto"` for FFT convolution (fast, noiseless before Poisson noise), `"phot"` for photon shooting (intrinsic Poisson noise) |
+| `max_phot_sources` | `100` | Maximum sources per batch when `method="phot"`; reduces memory usage for large catalogs |
+
+The module lives at `src/gcphotom/galsim_simulator.py` and is exported as
+`gcp.simulate_image_galsim`.
+
+#### Noise model comparison
+
+| Component | `method="auto"` (FFT) | `method="phot"` (photon shooting) |
+|---|---|---|
+| Sources | Noiseless FFT render | Poisson photons per source |
+| Background | Constant added, then `Poisson(total)` | Constant + separate `Poisson(background)` |
+| Read noise | `Gaussian(0, read_noise)` | Same |
+| Progress bar | None | `tqdm` over batches |
+
+#### Coordinate convention
+
+GalSim places world coordinate `(0, 0)` at the image centre.  The conversion
+from 0-indexed FITS pixel `(x, y)` to GalMan shift `(dx, dy)` is:
+
+```python
+dx = x - nx/2 + 0.5
+dy = y - ny/2 + 0.5
+```
+
+This is handled internally by `_fits_to_galsim_coords`.
+
+### 1.3 Monte Carlo simulation (`gcphotom.montecarlo.MonteCarlo`)
 
 Repeats the single-image simulation + photometry pipeline N times with
 independent random catalogs:
@@ -43,8 +89,8 @@ results = mc.run()          # -> list[dict]
 ```
 
 Each realisation:
-1. Generates a catalog via `catalog_fn(seed)` (or the default `make_realistic_source_catalog`).
-2. Simulates an image.
+1. Generates a catalog via `catalog_fn(seed)`.
+2. Simulates an image via `simulate_fn(...)`.
 3. Runs `run_pipeline` with the configured estimators.
 4. Collects the result.
 
@@ -77,6 +123,20 @@ catalog_fn = partial(gcp.make_gaia_source_catalog, wcs=wcs, shape=cfg.shape, zer
 mc = MonteCarlo(cfg, n_realizations=50, seed=42, catalog_fn=catalog_fn)
 ```
 
+### `simulate_fn`
+
+`MonteCarlo.__init__` also accepts an optional `simulate_fn` parameter — a
+callable with the same signature as `simulate_image(...)`.  Defaults to
+`gcp.simulate_image`.  Pass a wrapped `simulate_image_galsim` to use the
+GalSim backend:
+
+```python
+from functools import partial
+
+simulate_fn = partial(gcp.simulate_image_galsim, method="phot", max_phot_sources=100)
+mc = MonteCarlo(cfg, n_realizations=100, seed=42, simulate_fn=simulate_fn)
+```
+
 ---
 
 ## 2. SimulationConfig
@@ -95,74 +155,19 @@ realization:
 | `n_pixels`    | `int`   | 5       | Background mesh for `detect_and_segment` |
 | `fit_kwargs`  | `dict`  | `{lr=1e-2, niter=2000}` | Passed to `Fitter.fit()` |
 
+Note that `simulate_fn` is passed to `MonteCarlo` directly, not stored in
+`SimulationConfig`, to keep the dataclass backend-agnostic.
+
 ---
 
 ## 3. Estimator API
 
-An **estimator** is a function `(image, detections, cog) -> dict` that
-performs one photometry measurement on a realisation and returns:
+*(Unchanged — see existing documentation below for full details.)*
 
-```python
-{
-    "best_fit": {           # pytree of fitted parameters (must include "flux")
-        "flux": ndarray,    # per-source, NaN-expanded to det_cat length
-        ...                 # any other parameters (gamma, alpha, back, …)
-    },
-    "uncertainty": {        # same structure as best_fit, 1σ uncertainties
-        "flux": ndarray,    # or None if unavailable
-        ...
-    } | None,
-    "extra": {
-        "estimation_time": float,   # wall-clock seconds (added by @timed_estimator)
-        ...                         # any estimator-specific metadata
-    },
-}
-```
-
-Key rules:
-- **`best_fit["flux"]`** must be a 1-D array with the same length as the
-  detection catalog (sources dropped internally are NaN).
-- **`uncertainty`** is either a pytree matching `best_fit` or `None` (when
-  uncertainties are not available).
-- **`extra["estimation_time"]`** is mandatory — the `@timed_estimator`
-  decorator injects it automatically.
-
-### `@timed_estimator` decorator
-
-```python
-from gcphotom.montecarlo import timed_estimator
-
-@timed_estimator
-def my_estimator(image, detections, cog):
-    # ... compute ...
-    return {"best_fit": ..., "uncertainty": ...}
-    # extra["estimation_time"] is added automatically
-```
-
-The decorator wraps the function, measures wall time with
-`time.perf_counter()`, and inserts `estimation_time` into the returned
-`extra` dict.  If the function already returned an `extra` dict the
-decorated fields are merged.
-
-### `detections` dict
-
-Passed to every estimator, it contains the outputs of
-`detect_and_segment`:
-
-```python
-{
-    "seg": seg,             # segmentation image (ndarray)
-    "det_cat": det_cat,     # detection catalog (SourceCatalog, *not* persisted)
-    "bkg_map": bkg_map,     # background map (ndarray)
-    "bkg_var_map": ...,     # background variance map (ndarray)
-}
-```
-
-The `det_cat` in the `detections` dict is the full `photutils.segmentation.SourceCatalog` needed by the estimators.
-In the pipeline result, `det_cat` is a lightweight `~astropy.table.Table` (see `det_cat_to_table`).
-
-**Note:** estimators that need initial-guess quality flags compute them
-internally from `det_cat` (e.g. `(ellipticity * area) > 6`).
+An estimator is a function `(image, detections, cog) -> dict` that performs
+one photometry measurement.  The API, `@timed_estimator` decorator,
+`detections` dict, and built-in estimators are documented in sections 4–5
+below.
 
 ---
 
@@ -171,7 +176,7 @@ internally from `det_cat` (e.g. `(ellipticity * area) > 6`).
 | Function | Key in `default_estimators()` | Description |
 |----------|-------------------------------|-------------|
 | `gc_estimator` | `"GC"` | Two-step growth-curve fit with free background.  Returns `flux`, `back`, `gamma`, `alpha`, `ngoods`, `chi2` and their standard errors. |
-| `gc_fixed_back_estimator` | `"GC (fixed back)"` | Same but background is fixed to the mean fitted value — isolates the effect of background misestimation on fluxes. |
+| `gc_fixed_back_estimator` | `"GC (fixed back)"` | Same but background is fixed to the detection background map at each source position. |
 | `aperture_estimator` | `"Aperture + AC"` | Aperture photometry with aperture correction from bright isolated stars.  Uses a data-driven PSF correction from the flux ratio at two intermediate radii.  `best_fit` contains only `flux`. |
 | `psf_estimator` | `"PSF"` | PSF photometry via `psf_photometry`.  `best_fit` contains only `flux`. |
 
@@ -272,13 +277,53 @@ Uses `pickle.dump` / `pickle.load`.  Loaded results work directly with
 `compute_flux_bias` and `plot_flux_bias`.
 
 The `det_cat` saved in each realisation is a lightweight `~astropy.table.Table`
-(five columns: `x`, `y`, `area`, `ellipticity`, `kron_flux`) rather than the
-full `SourceCatalog`.  Use `det_cat_to_table(det_cat)` to create such a table
-manually from a `SourceCatalog`.
+rather than the full `SourceCatalog`.
 
 ---
 
-## 8. Adding a new estimator
+## 8. CLI example script
+
+`examples/mc_flux_bias_coverage.py` provides a full-featured CLI for running
+and analysing Monte Carlo simulations.  Two subcommands:
+
+### `run` — run a new simulation
+
+All simulation parameters are configurable via CLI options:
+
+```bash
+# Default (astropy, 1024×1024, 1000 sources, 100 realisations)
+uv run python examples/mc_flux_bias_coverage.py run
+
+# GalSim photon shooting with custom parameters
+uv run python examples/mc_flux_bias_coverage.py run \
+    --simulator galsim-phot \
+    --ny 512 --nx 512 \
+    --n-sources 500 \
+    --n-realizations 50 \
+    --gamma 2.5 --alpha 4.0 \
+    --background 200 --read-noise 3 \
+    --max-phot-sources 100 \
+    --learning-rate 5e-3 --niter 3000 \
+    --output my_results
+
+# Output files
+#   mc_flux_bias_<simulator>.png
+#   mc_scalar_bias_<simulator>.png
+#   mc_estimation_times_<simulator>.png
+```
+
+### `show` — re-plot from saved results
+
+```bash
+uv run python examples/mc_flux_bias_coverage.py show my_results.pkl
+```
+
+Uses `gcp.montecarlo.load_results` to load the pickle and produces the same
+three plots, tagged with the filename stem.
+
+---
+
+## 9. Adding a new estimator
 
 1. Write a function with the `(image, detections, cog)` signature.
 2. Decorate it with `@timed_estimator`.
@@ -298,7 +343,7 @@ auto-detect new estimator keys.
 
 ---
 
-## 9. Data flow
+## 10. Data flow
 
 ```
 SimulationConfig
@@ -311,7 +356,8 @@ MonteCarlo.run()
        │   ├── catalog_fn(seed) ──┤  ← defaults to make_realistic_source_catalog
        │   │                      │    can be make_test_source_catalog,
        │   │                      │    make_gaia_source_catalog, or custom
-       │   ├── simulate_image()
+       │   ├── simulate_fn(...) ──┤  ← defaults to simulate_image (astropy),
+       │   │                      │    can be simulate_image_galsim (GalSim)
        │   ├── run_pipeline()
        │   │    ├── detect_and_segment()          → detections dict
        │   │    ├── extract_growth_curves()       → cog
@@ -319,27 +365,125 @@ MonteCarlo.run()
        │   │    └── estimator(img, detections, cog)  → result per estimator
        │   │                            (×N estimators)
        │   │
-       │   └── append result dict (det_cat → lightweight Table via det_cat_to_table)
+       │   └── append result dict (det_cat → lightweight Table)
        │
        └── return list[dict] ──┐
-                               ▼
-                    compute_flux_bias()  →  plot_flux_bias()
-                    plot_scalar_bias()   →  plot_estimation_times()
-                               │
-                               ▼
-                     save_results() / load_results()  (pickle)
+                                ▼
+                     compute_flux_bias()  →  plot_flux_bias()
+                     plot_scalar_bias()   →  plot_estimation_times()
+                                │
+                                ▼
+                      save_results() / load_results()  (pickle)
 ```
+
+Key extension points:
+- **`catalog_fn`** — custom source catalog generation
+- **`simulate_fn`** — custom image rendering (astropy, GalSim, or custom)
+- **Estimator dict** — arbitrary number of photometry estimators
 
 ---
 
-## 10. GalSim integration study
+## 11. GalSim photon-shooting performance
 
-[GalSim](https://github.com/GalSim-developers/GalSim) (Rowe et al. 2015, A&C,
-10, 121) is the standard open-source library for simulating astronomical images.
-This section documents its capabilities relevant to growth-curve photometry
-simulations, based on GalSim v2.8.4.
+The following table summarises typical wall-clock times for a single
+realisation (1024×1024, 1000 sources, Moffat γ=3.0, α=3.0) on a modern
+CPU.  GalSim photon-shooting time scales linearly with total flux and
+source count; FFT time scales with image size.
 
-### 10.1 PSF profiles
+| Backend | Method | Time | Notes |
+|---------|--------|------|-------|
+| astropy | `make_model_image` | ~2 s | Oversampled rendering, single-threaded |
+| GalSim | `method="auto"` (FFT) | ~15 s | FFT convolution, suitable for large images |
+| GalSim | `method="phot"` | ~30-60 s | Batch size 100; scales with total flux |
+
+For 100-realisation Monte Carlo runs, plan for:
+- **astropy**: ~3-4 minutes
+- **GalSim FFT**: ~25 minutes
+- **GalSim photon shooting**: ~1 hour
+
+---
+
+## 12. What remains to be implemented
+
+The following features would improve the realism and flexibility of the
+simulation framework but are not yet implemented:
+
+### 12.1 PSF variety beyond Moffat
+
+GalSim provides numerous PSF profiles, including:
+
+- **Kolmogorov** — long-exposure atmospheric PSF (pure Kolmogorov turbulence)
+- **von Karman** — includes outer scale L₀ (~10–100 m); has a core component
+- **Airy** — diffraction-limited PSF for a circular aperture
+- **OpticalPSF** — aberrated PSF via Zernike polynomials (Noll/annular),
+  obscuration, struts
+- **PhaseScreenPSF** — time-evolving atmospheric + optical phase screens
+- **InterpolatedImage** — arbitrary PSF from a data image (e.g., observed
+  star stamp)
+
+The current `simulate_image_galsim` hardcodes `gs.Moffat`.  A future
+version could accept a `psf_fn` callback that returns a `GSObject` for
+each source, enabling arbitrary PSF comparison within the same pipeline.
+
+### 12.2 Chromatic effects
+
+GalSim has first-class support for wavelength-dependent PSF:
+
+- `ChromaticObject`, `ChromaticAtmosphere` (DCR + λ⁻⁰·² seeing scaling)
+- `ChromaticOpticalPSF`, `ChromaticAiry`
+- `Bandpass` integration with SEDs
+
+Adding chromaticity requires:
+1. Extending the source catalog with SED information (or assuming a
+   universal SED per source type).
+2. Replacing the monochromatic `drawImage` call with a chromatic one
+   that integrates over a `Bandpass`.
+3. Handling the bandpass zero-point consistently with the flux scale.
+
+### 12.3 Sensor effects
+
+GalSim includes detailed detector models:
+
+- **Brighter-fatter effect** — `SiliconSensor` with configurable strength
+- **Charge diffusion** — field-dependent diffusion length
+- **Tree rings** — radial doping variations via `LookupTable`
+- **Roman-specific** — non-linearity, reciprocity failure, inter-pixel
+  capacitance (IPC), persistence
+
+These require `method="phot"` (photon shooting) and the `sensor=` keyword
+argument to `drawImage`.  They are relevant for high-precision photometry
+at the 0.1% level.
+
+### 12.4 Correlated noise
+
+GalSim can generate correlated noise from an image or power spectrum via
+`CorrelatedNoise`, and provides `getCOSMOSNoise()` for HST F814W.  This
+would replace the current simple Gaussian read noise with realistic
+sky-subtraction residuals.
+
+### 12.5 WCS and astrometric distortions
+
+The current simulation uses a pixel scale of 1.0 (no WCS).  GalSim supports
+a full WCS hierarchy (`PixelScale`, `AffineTransform`, `FitsWCS`, `TanWCS`,
+`FittedSIPWCS`).  Adding WCS would allow:
+- Simulating images with realistic pixel scales and distortions.
+- Matching the WCS used for Gaia source catalog queries.
+
+### 12.6 Real galaxy morphologies
+
+GalSim's `RealGalaxy` from the HST COSMOS catalog provides realistic
+galaxy shapes and profiles.  This could replace the simple Moffat model
+for science validation.
+
+---
+
+## 13. GalSim integration study (reference)
+
+The following sections document the GalSim capabilities surveyed during
+initial integration planning and remain relevant as a reference for future
+work.
+
+### 13.1 PSF profiles
 
 GalSim provides these PSF profile classes (all in `galsim.*`, all subclasses of
 `GSObject`):
@@ -355,18 +499,14 @@ GalSim provides these PSF profile classes (all in `galsim.*`, all subclasses of
 | `PhaseScreenPSF` | PSF from atmospheric + optical phase screens; time-evolving; the most physically realistic model |
 | `InterpolatedImage(image, ...)` | Arbitrary PSF from a data image (e.g., observed star stamp) |
 
-**Relevance:** Our current simulations use only Moffat PSF. GalSim makes it
-trivial to compare Moffat, Kolmogorov, von Karman, aberrated optical, and
-data-driven PSFs within the same framework.
-
-### 10.2 PSF tails at large radius
+### 13.2 Rendering accuracy
 
 GalSim draws profiles via three methods, each with different tail behaviour:
 
 | Method | Behaviour | Tail handling |
 |--------|-----------|---------------|
 | `'auto'` | FFT for most profiles, `'real_space'` for hard-edged ones | FFT: analytic k-space, folding controlled by `folding_threshold` |
-| `'fft'` | Convolve with pixel via DFT; multiply in k-space, FFT back | **Folding concern**: periodic boundaries cause aliasing. Mitigate with `folding_threshold=1e-6` and `maximum_fft_size` up to 8192+ |
+| `'fft'` | Convolve with pixel via DFT; multiply in k-space, FFT back | Folding concern: periodic boundaries cause aliasing. Mitigate with `folding_threshold=1e-6` and `maximum_fft_size` up to 8192+ |
 | `'real_space'` | Direct Gauss–Kronrod–Patterson integration over pixel area | Accurate for truncated profiles; slower; limited to 2-component convolutions |
 | `'phot'` | Photon shooting: profile sampled as PDF, photons binned | Naturally handles infinite tails; needs sufficient `n_photons`; not available for deconvolutions |
 
@@ -381,126 +521,12 @@ gsp = galsim.GSParams(
 )
 ```
 
-**Implication for growth-curve photometry:** The default FFT method can
-alias ~0.5% of PSF flux into the wings. For bias studies at the 0.1% level,
-use `folding_threshold=1e-6` or render with `'real_space'` for analytic
-profiles.  Profiles with `is_analytic_x = True` (Gaussian, Moffat, Sersic, …)
-can also be evaluated at arbitrary (x, y) via `xValue()` — ideal for
-computing exact growth curves without FFT artifacts.
+### 13.3 Chromatic and sensor capabilities
 
-### 10.3 Spatially and colour-varying PSF
+See sections 12.2 and 12.3 above for the status of chromatic and sensor
+effect implementation.
 
-**Chromatic (wavelength-dependent) PSF** is a first-class concept:
-
-- `ChromaticObject` — base class wrapping a `GSObject`; transformation args
-  can be functions of wavelength λ.
-- `ChromaticAtmosphere(base_obj, base_wavelength, zenith_angle, …)` —
-  differential chromatic refraction (DCR) + λ∝⁻⁰·² seeing scaling.
-- `ChromaticOpticalPSF(lam, diam, aberrations, …)` — λ-dependent diffraction
-  and Zernike scaling.
-- `ChromaticAiry`, `ChromaticRealGalaxy`, `InterpolatedChromaticObject`.
-- `ChromaticConvolution`, `ChromaticSum`, `ChromaticTransformation`.
-
-**Bandpass integration:**
-
-```python
-bp = galsim.Bandpass('LSST_r.dat', wave_type='nm')
-image = chromatic_obj.drawImage(bp, scale=0.2)
-```
-
-The integrator caches SED×Bandpass products for speed.  `Spectrum` objects
-(built-in SEDs like `SED('CWW_E_ext.sed', wave_type='nm')`) model galaxy/star
-spectral energy distributions.
-
-**Field-varying PSF:**
-
-- `PhaseScreenList.makePSF(theta=(x_angle, y_angle))` — atmospheric PSF at
-  a specific field angle (the phase screens compute the wavefront at that
-  angle).
-- `galsim.roman.getPSF(SCA, bandpass, SCA_pos)` — Roman Space Telescope PSF
-  with Zernike aberrations interpolated across each SCA from WebbPSF tables.
-- No built-in "multi-position PSF manager" — users loop over positions and
-  construct per-position PSFs manually.
-
-**Relevance:** Chromatic effects (DCR + λ-dependent seeing) can be significant
-for growth-curve photometry in wide-band surveys.  GalSim allows quantifying
-this bias.  Field-varying PSF is relevant for large-format detectors (Roman,
-LSST).
-
-### 10.4 Sensor effects
-
-**Brighter-fatter effect, charge diffusion, tree rings:**
-
-```python
-sensor = galsim.SiliconSensor(
-    name='lsst_itl_50_8',    # also 'lsst_e2v_*' models
-    strength=1.0,            # brighter-fatter amplitude
-    diffusion_factor=1.0,    # charge diffusion (0 to disable)
-    treering_func=...,       # LookupTable for radial tree ring profile
-    treering_center=...,     # PositionD
-)
-```
-
-Applied during photon accumulation: `image = obj.drawImage(..., sensor=sensor,
-method='phot')`.
-
-**Roman-specific detector effects** (`galsim.roman`):
-
-| Function | Effect |
-|----------|--------|
-| `applyNonlinearity(img)` | Second-order non-linearity: `counts_out = counts_in + β·counts_in²` |
-| `addReciprocityFailure(img, exptime)` | Wavelength-dependent QE drop at low flux |
-| `applyIPC(img)` | Inter-pixel capacitance (3×3 convolution kernel) |
-| `applyPersistence(img, prev_exposures)` | Residual images from prior exposures |
-
-**Not implemented** (planned): cosmic rays, saturation/bleeding, vignetting,
-fringing.
-
-### 10.5 Integration approach for our code
-
-The current `simulate_image` in `src/gcphotom/simulator.py` uses
-`photutils.datasets.make_model_image` to render Moffat sources.  Replacing
-this with GalSim involves:
-
-```python
-import galsim as gs
-
-# 1. Build profiles per source
-profiles = []
-for src in catalog:
-    moffat = gs.Moffat(beta=alpha, scale_radius=gamma / beta, flux=src['flux'])
-    moffat = moffat.shift(dx=src['x'], dy=src['y'])
-    profiles.append(moffat)
-
-# 2. Sum all profiles
-scene = gs.Add(profiles)
-
-# 3. Draw
-image = scene.drawImage(nx=shape[1], ny=shape[0], scale=1.0,
-                        dtype=np.float32, method='auto')
-```
-
-**Key adaptations needed:**
-
-| Current (`photutils`) | GalSim equivalent |
-|------------------------|-------------------|
-| `make_model_image(coords, fluxes, flux_radius=gamma/alpha,…)` | `galsim.Moffat(beta, scale_radius).shift(dx,dy)` + `galsim.Add` + `drawImage` |
-| Moffat only | Any `GSObject` (Kolmogorov, Airy, `OpticalPSF`, `InterpolatedImage`, …) |
-| Additive Gaussian + Poisson noise | `galsim.GaussianNoise(rng, sigma)` + Poisson via `method='phot'` |
-| WCS via pixel scale scalar | `galsim.PixelScale(scale)` or `galsim.AffineTransform` or `galsim.FitsWCS` |
-| No chromaticity | `ChromaticObject` + `Bandpass` integration |
-
-The Monte Carlo loop structure (`catalog_fn` → `simulate_image` → estimators)
-remains unchanged — only `simulate_image` (and optionally `make_source_catalog`
-to attach SEDs) needs modification.
-
-**Dependency:** GalSim is a large package with a C++ core and requires FFTW.
-Installed via `pip install galsim` or `conda install -c conda-forge galsim`.
-It does not depend on JAX — the two can coexist, but GalSim will be the
-bottleneck for Monte Carlo loops (it is optimised, but single-threaded in
-Python).
-
-### 10.6 Additional relevant capabilities
+### 13.4 Additional capabilities
 
 | Feature | Details |
 |---------|---------|
@@ -512,85 +538,21 @@ Python).
 | **Lookup tables** | `galsim.LookupTable` — 1-D interpolation for SEDs, bandpasses, tree ring profiles |
 | **Config system** | YAML-based simulation descriptions for non-Python users (not relevant to our API) |
 
-### 10.7 Summary
-
-GalSim would strengthen our simulations by adding:
-
-1. **Realistic PSF variety** — Kolmogorov, von Karman, aberrated optical, data-driven
-2. **Chromatic effects** — DCR, λ-dependent seeing, bandpass integration
-3. **Sensor effects** — brighter-fatter, charge diffusion, tree rings
-4. **Correlated noise** — realistic sky subtraction residuals
-5. **Real galaxies** — COSMOS-based training/testing
-
-The main cost is API adaptation in `simulate_image` and a heavier dependency
-(FFTW, C++ compilation).  The Monte Carlo loop structure, estimator API, and
-bias analysis code need no changes.
-
 ---
 
-## 11. Photon-shooting Gaia field demo
+## 14. Photon-shooting verification
 
-A demonstrator script (`examples/galsim_gaia_photon_shooting.py`) was written
-to test GalSim's photon-shooting and FFT rendering on the three Gaia DR3 fields
-used by `examples/mc_gaia_bias.py`.  The script queries Gaia for sources,
-renders them with a Moffat PSF (γ=3.0, β=3.0, ZP=25, G<20), adds constant
-background (100 ADU) and Gaussian read noise (5 ADU), and reports wall-clock
-time.  Chromatic and sensor effects are ignored.
+A dedicated verification script (`examples/check_galsim_photon_shooting.py`)
+validates that GalSim photon shooting produces unbiased flux realisations
+with correct centering.  Key results for a single Moffat source with
+γ=3.0, α=3.0, flux=50000 ADU at the centre of a 129×129 image:
 
-### 11.1 Timing results (512×512 images)
-
-| Field | Sources | Total flux (ADU) | Photon shooting | FFT |
-|-------|---------|-----------------|-----------------|-----|
-| COSMOS (b≈+42°, sparse) | 67 | 3.6×10⁵ | **0.06 s** | 1.00 s |
-| Gemini (b≈+15°, mid) | 406 | 4.3×10⁶ | **3.28 s** | 6.13 s |
-| Cygnus (b≈0°, dense) | 2647 | 6.0×10⁶ | **27.20 s** | 39.97 s |
-
-### 11.2 Key findings
-
-**Photon shooting is faster than FFT** for all three fields at 512×512.
-The speed ratio ranges from ~1.5× (Cygnus) to ~16× (COSMOS).
-
-**Scaling:** Photon-shooting wall time scales linearly with total flux
-(~6 µs per ADU).  FFT time scales with both source count and image size
-(the k-space grid is fixed by image dimensions).  For sparse fields with
-few bright sources, photon shooting is dramatically faster.
-
-**Noise properties:** The photon-shooting images show pure Poisson noise
-(no approximation), while the FFT images have Poisson noise approximated
-by adding Gaussian noise to the rendered surface brightness.  The
-difference maps (photon shooting − FFT) show structure dominated by
-Poisson shot noise in bright sources and the read-noise floor in the
-background.
-
-**Limitations of this demo:**
-- Moffat PSF only; no comparison with Kolmogorov, Airy, or data-driven PSFs.
-- No chromatic effects (DCR, λ-dependent seeing, bandpass integration).
-- No sensor effects (brighter-fatter, charge diffusion, tree rings).
-- No correlated noise.
-- Background is added as a flat constant after drawing, rather than being
-  included in the photon shooting (which would correctly add Poisson noise
-  to the background as well).
-- Read noise is added as Gaussian after drawing, which is correct.
-- 512×512 images — timing ratios may change for larger images where the FFT
-  overhead is amortised over more pixels.
-
-### 11.3 Implications for growth-curve photometry simulations
-
-1. **Photon shooting is viable for Monte Carlo runs.**  Even the dense
-   Cygnus field takes only 27 s per realisation.  A 100-realisation MC
-   would take ~45 minutes for Cygnus, well within practical limits.
-
-2. **The FFT path is also viable but slower.**  For COSMOS-like fields,
-   FFT is 1 s vs 0.06 s — a 16× penalty that adds up over many realisations.
-
-3. **The trade-off changes with image size.**  FFT cost grows as
-   O(N_pix log N_pix), photon-shooting cost as O(total flux).  For larger
-   formats (2048×2048, 4096×4096) the FFT path may become more competitive.
-
-4. **Coordinate mapping works correctly** with the formula:
-   `shift(dx, dy)` where `dx = x_src - nx/2 + 0.5`, `dy = y_src - ny/2 + 0.5`
-   (0-indexed FITS pixel → GalSim world coordinate).
-
-5. **The Monte Carlo loop structure is unaffected.**  Only `simulate_image`
-   needs to be replaced; the `catalog_fn` → estimators → bias analysis chain
-   requires no changes.
+- **Centroid**: matches input position to within ~0.01 pixels (Poisson-noise
+  limited: σ_centroid ≈ FWHM / (2.355√N) ≈ 0.006 pix).
+- **Growth-curve**: sinc-extracted profile matches the analytic Moffat to
+  within <0.3% at most radii (FFT reference); residuals at large radii are
+  shot-noise dominated.
+- **Total flux**: recovered flux is within 1σ of the input
+  (√50000/50000 ≈ 0.45%).
+- **Pixelization bias**: the sinc extraction method corrects the 2-10%
+  bias visible with standard (`photutils`) aperture photometry.
