@@ -131,29 +131,18 @@ ax_diff.set_title("Sensor / No sensor − 1")
 ax_diff.legend(frameon=False, fontsize=8)
 ax_diff.grid(True, alpha=0.3)
 
-# Bottom right: zoom on the inner region for one colour
-bp_rp_mid = 0.0
-no = results[bp_rp_mid]["no_sensor"]
-yes = results[bp_rp_mid]["with_sensor"]
-inner = radii < 15
-ax_detail.plot(
-    radii[inner],
-    no[inner],
-    "o-",
-    color="C0",
-    ms=4,
-    label=f"No sensor, bp-rp={bp_rp_mid:+.1f}",
-)
-ax_detail.plot(
-    radii[inner],
-    yes[inner],
-    "s-",
-    color="C3",
-    ms=4,
-    label=f"Sensor, bp-rp={bp_rp_mid:+.1f}",
-)
-ax_detail.set_title(f"Zoom (bp-rp = {bp_rp_mid:+.1f})")
-ax_detail.legend(frameon=False, fontsize=8)
+# Bottom right: annular profiles in log-log
+for bp_rp, c in zip(colours, colors_plot):
+    ann_no = gcp.gcmodel.annular_fluxes(results[bp_rp]["no_sensor"])
+    ann_yes = gcp.gcmodel.annular_fluxes(results[bp_rp]["with_sensor"])
+    ax_detail.loglog(
+        radii, ann_no, "o-", color=c, ms=4, label=f"bp-rp={bp_rp:+.1f} (no)"
+    )
+    ax_detail.loglog(
+        radii, ann_yes, "s--", color=c, ms=4, label=f"bp-rp={bp_rp:+.1f} (sen)"
+    )
+ax_detail.set_title("Annular profiles")
+ax_detail.legend(frameon=False, fontsize=7, ncol=2)
 ax_detail.grid(True, alpha=0.3)
 
 for ax in axes.flat:
