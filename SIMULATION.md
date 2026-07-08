@@ -283,19 +283,30 @@ rather than the full `SourceCatalog`.
 
 ## 8. CLI example script
 
-`examples/mc_flux_bias_coverage.py` provides a full-featured CLI for running
+`examples/mc_bias.py` provides a full-featured CLI for running
 and analysing Monte Carlo simulations.  Two subcommands:
 
 ### `run` — run a new simulation
 
-All simulation parameters are configurable via CLI options:
+The `--n-sources` option selects the source catalog type:
+- An **integer** (e.g. `--n-sources 1000`) — synthetic catalog with that many sources per realisation.
+- A **field name** (`COSMOS`, `Gemini`, `Cygnus`) — Gaia DR3 catalog for that field,
+  with predefined pixel scale (1″/pix), zeropoint (25.0), and G<20 magnitude limit.
+
+All other options (`--gamma`, `--simulator`, `--background`, …) work identically in both modes.
+
+By default the `run` command saves results to an auto-named pickle file and does
+**not** produce plots.  Pass `--plot` to also generate bias plots, or use the
+`show` subcommand later on any saved result file.
+
+Synthetic examples:
 
 ```bash
 # Default (astropy, 1024×1024, 1000 sources, 100 realisations)
-uv run python examples/mc_flux_bias_coverage.py run
+uv run python examples/mc_bias.py run
 
 # GalSim photon shooting with custom parameters
-uv run python examples/mc_flux_bias_coverage.py run \
+uv run python examples/mc_bias.py run \
     --simulator galsim-phot \
     --ny 512 --nx 512 \
     --n-sources 500 \
@@ -305,17 +316,34 @@ uv run python examples/mc_flux_bias_coverage.py run \
     --max-phot-sources 100 \
     --learning-rate 5e-3 --niter 3000 \
     --output my_results
-
-# Output files
-#   mc_flux_bias_<simulator>.png
-#   mc_scalar_bias_<simulator>.png
-#   mc_estimation_times_<simulator>.png
 ```
+
+Gaia examples (the three fields from the demo script):
+
+```bash
+# Low stellar density — COSMOS field (b ≈ +42°)
+uv run python examples/mc_bias.py run --n-sources COSMOS
+
+# Mid density — Gemini field (b ≈ +15°)
+uv run python examples/mc_bias.py run --n-sources Gemini --n-realizations 50
+
+# High density — Cygnus field (Galactic plane, b ≈ 0°) — with plots
+uv run python examples/mc_bias.py run --n-sources Cygnus --plot
+```
+
+Output files (auto-named from non-default parameters):
+
+| Command | Saved result | With `--plot` also saves |
+|---------|-------------|--------------------------|
+| `mc_bias.py run` | `mc_astropy.pkl` | `mc_flux_bias_astropy.png`, … |
+| `mc_bias.py run --n-sources 500 --n-realizations 50` | `mc_astropy_r50_n500.pkl` | `mc_flux_bias_astropy.png`, … |
+| `mc_bias.py run --n-sources COSMOS` | `mc_COSMOS.pkl` | `mc_flux_bias_COSMOS.png`, … |
+| `mc_bias.py run --n-sources COSMOS -o my.pkl` | `my.pkl` | `mc_flux_bias_COSMOS.png`, … |
 
 ### `show` — re-plot from saved results
 
 ```bash
-uv run python examples/mc_flux_bias_coverage.py show my_results.pkl
+uv run python examples/mc_bias.py show my_results.pkl
 ```
 
 Uses `gcp.montecarlo.load_results` to load the pickle and produces the same
