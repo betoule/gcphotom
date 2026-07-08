@@ -1,7 +1,11 @@
 import numpy as np
 
 import gcphotom as gcp
-from gcphotom.simulator import make_realistic_source_catalog, simulate_image
+from gcphotom.simulator import (
+    make_realistic_source_catalog,
+    make_test_source_catalog,
+    simulate_image,
+)
 
 
 class TestMakeSourceCatalog:
@@ -24,6 +28,17 @@ class TestMakeSourceCatalog:
         log_flux = np.log10(cat["flux"])
         expected_mean = (np.log10(100) + np.log10(1e6)) / 2
         assert abs(np.mean(log_flux) - expected_mean) < 0.05
+
+    def test_bp_rp_column(self):
+        cat = make_realistic_source_catalog(100, shape=(256, 256), seed=42)
+        assert "bp_rp" in cat.colnames
+        assert np.all(cat["bp_rp"] >= -0.3)
+        assert np.all(cat["bp_rp"] <= 3.0)
+
+    def test_bp_rp_variation(self):
+        """Not all bp_rp values are identical."""
+        cat = make_realistic_source_catalog(100, shape=(256, 256), seed=42)
+        assert np.unique(cat["bp_rp"]).size > 1
 
 
 class TestSimulateImage:
@@ -91,3 +106,6 @@ class TestSimulateImage:
         cat = gcp.make_test_source_catalog(n_sources_side=3, shape=(64, 64))
         assert len(cat) == 9
         assert "x" in cat.colnames and "y" in cat.colnames and "flux" in cat.colnames
+        assert "bp_rp" in cat.colnames
+        assert np.all(cat["bp_rp"] >= -0.3)
+        assert np.all(cat["bp_rp"] <= 3.0)

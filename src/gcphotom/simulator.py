@@ -38,6 +38,13 @@ def make_realistic_source_catalog(
     log_flux = rng.uniform(log_fmin, log_fmax, n_sources)
     catalog["flux"] = 10**log_flux
 
+    # BP-RP colour: uniform over typical stellar range.
+    # Weakly correlated with flux (brighter → hotter → bluer).
+    catalog["bp_rp"] = rng.uniform(-0.3, 3.0, n_sources) - 0.5 * (
+        log_flux - log_fmin
+    ) / (log_fmax - log_fmin)
+    catalog["bp_rp"] = np.clip(catalog["bp_rp"], -0.3, 3.0)
+
     return catalog
 
 
@@ -73,6 +80,8 @@ def make_test_source_catalog(n_sources_side=4, shape=(128, 128), fmin=100, fmax=
 
     log_fmin, log_fmax = np.log10(fmin), np.log10(fmax)
     catalog["flux"] = np.logspace(log_fmin, log_fmax, len(xs.flatten()))
+
+    catalog["bp_rp"] = np.linspace(-0.3, 3.0, len(xs.flatten()))
 
     return catalog
 

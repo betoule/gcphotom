@@ -8,6 +8,12 @@ from tqdm.auto import tqdm
 
 import galsim as gs
 
+from .chromatic import (
+    build_chromatic_psf,
+    build_sensor,
+    sed_from_color,
+    tophat_bandpass,
+)
 from .simulator import make_realistic_source_catalog
 
 
@@ -28,6 +34,13 @@ def simulate_image_galsim(
     *,
     method="auto",
     max_phot_sources=100,
+    # Chromatic / sensor options
+    chromatic=False,
+    bandpass="r",
+    sensor=False,
+    bf_strength=0.0,
+    diffusion_factor=0.0,
+    zenith_angle=30.0,
 ):
     """Simulate an image using GalSim.
 
@@ -57,6 +70,20 @@ def simulate_image_galsim(
     max_phot_sources : int
         Maximum number of sources per batch when photon shooting.
         Only relevant when ``method="phot"``.
+    chromatic : bool
+        Enable chromatic rendering (PSF + SED).  Requires ``method="phot"``
+        and a ``bp_rp`` column in the catalog.
+    bandpass : str
+        Bandpass name for chromatic mode: ``"g"``, ``"r"``, ``"i"``, ``"z"``.
+    sensor : bool
+        Enable SiliconSensor (brighter-fatter + charge diffusion).
+        Requires ``method="phot"`` and ``chromatic=True``.
+    bf_strength : float
+        Brighter-fatter strength (0 = off, 1 = LSST nominal).
+    diffusion_factor : float
+        Charge diffusion factor (0 = off, 1 = LSST nominal).
+    zenith_angle : float
+        Zenith angle in degrees for chromatic DCR.
 
     Returns
     -------
@@ -74,9 +101,32 @@ def simulate_image_galsim(
     gs_rng = gs.BaseDeviate(seed)
     np_rng = np.random.default_rng(seed)
 
+    if chromatic or sensor:
+        method = "phot"
+
     if method == "phot":
         image = None
         n_batches = (len(catalog) + max_phot_sources - 1) // max_phot_sources
+
+        # Build shared chromatic / sensor resources once.
+        psf = None
+        bp = None
+        sens = None
+        if chromatic:
+            psf = build_chromatic_psf(
+                gamma=gamma,
+                alpha=alpha,
+                zenith_angle=zenith_angle,
+                pixel_scale=1.0,
+            )
+            bp = tophat_bandpass(bandpass)
+        if sensor:
+            sens = build_sensor(
+                bf_strength=bf_strength,
+                diffusion_factor=diffusion_factor,
+                seed=seed,
+            )
+
         for start in tqdm(
             range(0, len(catalog), max_phot_sources),
             total=n_batches,
@@ -91,14 +141,35 @@ def simulate_image_galsim(
                 if flux <= 0:
                     continue
                 dx, dy = _fits_to_galsim_coords(row["x"], row["y"], nx, ny)
-                moffat = gs.Moffat(beta=alpha, scale_radius=gamma, flux=flux)
-                profiles.append(moffat.shift(dx=dx, dy=dy))
+
+                if chromatic:
+                    sed = sed_from_color(float(row.get("bp_rp", 0.0)))
+                    sed_norm = sed.withFlux(flux, bandpass=bp)
+                    star = gs.DeltaFunction() * sed_norm
+                    obj = gs.Convolve([psf, star]).shift(dx=dx, dy=dy)
+                    profiles.append(obj)
+                else:
+                    moffat = gs.Moffat(beta=alpha, scale_radius=gamma, flux=flux)
+                    profiles.append(moffat.shift(dx=dx, dy=dy))
+
             if not profiles:
                 continue
             scene = gs.Add(profiles)
-            batch_img = scene.drawImage(
-                method="phot", nx=nx, ny=ny, scale=1.0, dtype=np.float32, rng=gs_rng
-            )
+
+            draw_kwargs = {
+                "method": "phot",
+                "nx": nx,
+                "ny": ny,
+                "scale": 1.0,
+                "dtype": np.float32,
+                "rng": gs_rng,
+            }
+            if bp is not None:
+                draw_kwargs["bandpass"] = bp
+            if sens is not None:
+                draw_kwargs["sensor"] = sens
+
+            batch_img = scene.drawImage(**draw_kwargs)
             image = batch_img if image is None else image + batch_img
 
         if image is None:

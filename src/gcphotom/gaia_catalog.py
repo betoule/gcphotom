@@ -72,7 +72,10 @@ def make_gaia_source_catalog(
     )
 
     mag = sources["phot_g_mean_mag"]
-    valid = np.isfinite(mag)
+    bp_mag = sources["phot_bp_mean_mag"]
+    rp_mag = sources["phot_rp_mean_mag"]
+
+    valid = np.isfinite(mag) & np.isfinite(bp_mag) & np.isfinite(rp_mag)
     if g_min is not None:
         valid &= mag >= g_min
     if g_max is not None:
@@ -80,6 +83,8 @@ def make_gaia_source_catalog(
 
     sources = sources[valid]
     mag = sources["phot_g_mean_mag"]
+    bp_mag = sources["phot_bp_mean_mag"]
+    rp_mag = sources["phot_rp_mean_mag"]
 
     sky = np.column_stack([sources["ra"], sources["dec"]])
     pix = wcs.wcs_world2pix(sky, 0)
@@ -96,6 +101,8 @@ def make_gaia_source_catalog(
     xs = xs[in_image]
     ys = ys[in_image]
     mag = mag[in_image]
+    bp_mag = bp_mag[in_image]
+    rp_mag = rp_mag[in_image]
 
     flux = 10.0 ** (-0.4 * (mag - zeropoint))
 
@@ -103,5 +110,6 @@ def make_gaia_source_catalog(
     catalog["x"] = xs
     catalog["y"] = ys
     catalog["flux"] = flux
+    catalog["bp_rp"] = bp_mag - rp_mag
 
     return catalog

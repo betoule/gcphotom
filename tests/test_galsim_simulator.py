@@ -91,3 +91,58 @@ class TestSimulateImageGalsim:
             shape, cat, background=0, read_noise=0, method="auto"
         )
         assert img.sum() == 0
+
+    def test_chromatic_rendering(self):
+        """Chromatic photon shooting produces a finite image."""
+        shape = (64, 64)
+        cat = Table({"x": [32.0], "y": [32.0], "flux": [50000.0], "bp_rp": [0.0]})
+        img, _ = gcp.simulate_image_galsim(
+            shape,
+            cat,
+            background=0,
+            read_noise=0,
+            method="phot",
+            max_phot_sources=10,
+            chromatic=True,
+            bandpass="r",
+        )
+        assert img.shape == shape
+        assert img.sum() > 0
+        assert np.all(np.isfinite(img))
+
+    def test_chromatic_with_sensor(self):
+        """Chromatic + sensor rendering produces a finite image."""
+        shape = (64, 64)
+        cat = Table({"x": [32.0], "y": [32.0], "flux": [50000.0], "bp_rp": [0.5]})
+        img, _ = gcp.simulate_image_galsim(
+            shape,
+            cat,
+            background=0,
+            read_noise=0,
+            method="phot",
+            max_phot_sources=10,
+            chromatic=True,
+            bandpass="r",
+            sensor=True,
+            bf_strength=0.5,
+            diffusion_factor=0.5,
+        )
+        assert img.shape == shape
+        assert img.sum() > 0
+        assert np.all(np.isfinite(img))
+
+    def test_chromatic_auto_switches_to_phot(self):
+        """chromatic=True forces method='phot' even if method='auto'."""
+        shape = (64, 64)
+        cat = Table({"x": [32.0], "y": [32.0], "flux": [50000.0], "bp_rp": [1.0]})
+        img, _ = gcp.simulate_image_galsim(
+            shape,
+            cat,
+            background=0,
+            read_noise=0,
+            method="auto",
+            chromatic=True,
+            bandpass="g",
+        )
+        assert img.shape == shape
+        assert img.sum() > 0

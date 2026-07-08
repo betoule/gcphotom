@@ -299,6 +299,10 @@ By default the `run` command saves results to an auto-named pickle file and does
 **not** produce plots.  Pass `--plot` to also generate bias plots, or use the
 `show` subcommand later on any saved result file.
 
+GalSim photon shooting (`--simulator galsim-phot`) additionally supports
+chromatic PSF rendering and LSST-like sensor effects — see section
+[12](#12-chromatic-rendering-and-sensor-effects) for details.
+
 Synthetic examples:
 
 ```bash
@@ -431,56 +435,115 @@ For 100-realisation Monte Carlo runs, plan for:
 
 ---
 
-## 12. What remains to be implemented
+## 12. Chromatic rendering and sensor effects
 
-The following features would improve the realism and flexibility of the
-simulation framework but are not yet implemented:
+GalSim-based photon shooting (`--simulator galsim-phot` with `--chromatic`)
+supports wavelength-dependent PSF and detector physics.
 
-### 12.1 PSF variety beyond Moffat
+### 12.1 Usage
 
-GalSim provides numerous PSF profiles, including:
+```bash
+# Chromatic photon shooting with top-hat r-band
+uv run python examples/mc_bias.py run \
+    --simulator galsim-phot --chromatic --bandpass r
 
-- **Kolmogorov** — long-exposure atmospheric PSF (pure Kolmogorov turbulence)
-- **von Karman** — includes outer scale L₀ (~10–100 m); has a core component
-- **Airy** — diffraction-limited PSF for a circular aperture
-- **OpticalPSF** — aberrated PSF via Zernike polynomials (Noll/annular),
-  obscuration, struts
-- **PhaseScreenPSF** — time-evolving atmospheric + optical phase screens
-- **InterpolatedImage** — arbitrary PSF from a data image (e.g., observed
-  star stamp)
+# Chromatic + LSST-like sensor (brighter-fatter + charge diffusion)
+uv run python examples/mc_bias.py run \
+    --simulator galsim-phot --chromatic --bandpass r \
+    --sensor --bf-strength 1.0 --diffusion-factor 1.0
 
-The current `simulate_image_galsim` hardcodes `gs.Moffat`.  A future
-version could accept a `psf_fn` callback that returns a `GSObject` for
-each source, enabling arbitrary PSF comparison within the same pipeline.
+# Zenith DCR with a realistic zenith angle (default 30°)
+uv run python examples/mc_bias.py run \
+    --simulator galsim-phot --chromatic --zenith-angle 30.0
+```
 
-### 12.2 Chromatic effects
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--chromatic` | `False` | Enable chromatic PSF + SED rendering (forces galsim-phot) |
+| `--bandpass` | `"r"` | Top-hat bandpass: `g` (400–550 nm), `r` (550–700), `i` (700–820), `z` (820–920) |
+| `--sensor` | `False` | Enable `SiliconSensor` (brighter-fatter + charge diffusion) |
+| `--bf-strength` | `0.0` | Brighter-fatter strength (0 = off, 1 = LSST nominal) |
+| `--diffusion-factor` | `0.0` | Charge diffusion factor (0 = off, 1 = LSST nominal) |
+| `--zenith-angle` | `30.0` | Zenith angle in degrees for atmospheric DCR |
 
-GalSim has first-class support for wavelength-dependent PSF:
+### 12.2 Architecture
 
-- `ChromaticObject`, `ChromaticAtmosphere` (DCR + λ⁻⁰·² seeing scaling)
-- `ChromaticOpticalPSF`, `ChromaticAiry`
-- `Bandpass` integration with SEDs
+The chromatic PSF is the convolution of two components, each independently
+toggleable:
 
-Adding chromaticity requires:
-1. Extending the source catalog with SED information (or assuming a
-   universal SED per source type).
-2. Replacing the monochromatic `drawImage` call with a chromatic one
-   that integrates over a `Bandpass`.
-3. Handling the bandpass zero-point consistently with the flux scale.
+1. **Atmospheric PSF** (`--chromatic`, default on) — `ChromaticAtmosphere`
+   wrapping a Moffat base at 500 nm.  Handles λ⁻⁰·² seeing scaling and
+   differential chromatic refraction (DCR) at the specified zenith angle.
+2. **Optical PSF** (`--chromatic`, default on) — `ChromaticOpticalPSF`
+   modelling an 8.36 m telescope (LSST-like) with λ-dependent diffraction
+   and Zernike aberrations.
 
-### 12.3 Sensor effects
+The PSF is pre-computed via `interpolate(waves)` on a grid of 20
+wavelengths for efficient batch rendering.
 
-GalSim includes detailed detector models:
+Source SEDs are blackbody spectra derived from the `bp_rp` colour column
+in the catalog.  The SED is normalised to the catalog flux in the chosen
+bandpass via `sed.withFlux(flux, bandpass=bp)`.
 
-- **Brighter-fatter effect** — `SiliconSensor` with configurable strength
-- **Charge diffusion** — field-dependent diffusion length
-- **Tree rings** — radial doping variations via `LookupTable`
-- **Roman-specific** — non-linearity, reciprocity failure, inter-pixel
-  capacitance (IPC), persistence
+The sensor model (`--sensor`) uses GalSim's `SiliconSensor` with the
+`lsst_itl_50_8` pixel grid (8 points per pixel edge).  Brighter-fatter
+strength and charge diffusion are independently adjustable.
 
-These require `method="phot"` (photon shooting) and the `sensor=` keyword
-argument to `drawImage`.  They are relevant for high-precision photometry
-at the 0.1% level.
+### 12.3 Catalog colour information
+
+The `bp_rp` column is automatically added to all generated catalogs:
+
+- **Synthetic**: drawn uniformly from [-0.3, 3.0] with a weak correlation
+  between flux and colour (brighter → bluer).
+- **Gaia DR3**: computed from `phot_bp_mean_mag - phot_rp_mean_mag`.
+- **Test grid**: linearly spaced across [-0.3, 3.0] (faintest source is
+  reddest).
+
+The colour is propagated through `sim_cat` in Monte Carlo results and is
+available for downstream analysis (e.g., colour-binned bias plots).
+
+### 12.4 Performance
+
+Chromatic photon shooting with sensor is substantially slower than the
+monochromatic path:
+
+| Configuration | Time / realisation (64², 1 source) |
+|-------------|--------------------------------------|
+| Monochromatic Moffat, `method="auto"` | ~0.01 s |
+| Monochromatic Moffat, `method="phot"` | ~0.1 s |
+| Chromatic, `method="phot"` | ~4 s |
+| Chromatic + sensor, `method="phot"` | ~5 s |
+
+For MC runs, plan for ~50× the cost of monochromatic FFT rendering.
+
+## 13. What remains to be implemented
+
+### 13.1 Detailed PSF calibration
+
+The current chromatic PSF uses a generic LSST-like model.  Future work
+could include:
+
+- **Zenith-angle-dependent DCR** for each source based on its field position
+  (currently a single zenith angle for the whole image).
+- **PhaseScreenPSF** for time-evolving atmospheric turbulence.
+- **Real galaxy SEDs** from stellar libraries (Pickles, etc.) instead of
+  blackbody approximations.
+- **PSF fitting from the image** — use the chromatic PSF model as a
+  template for PSF photometry.
+
+### 13.2 Extended sensor features
+
+- **Tree rings** — radial doping variations via `galsim.LookupTable`.
+- **Brighter-fatter correction** — invert the sensor model for calibration.
+- **Wavelength-dependent QE** — currently the bandpass throughput is a
+  top-hat; a real LSST QE curve would improve realism.
+
+### 13.3 Correlated noise
+
+GalSim can generate correlated noise from an image or power spectrum via
+`CorrelatedNoise`, and provides `getCOSMOSNoise()` for HST F814W.  This
+would replace the current simple Gaussian read noise with realistic
+sky-subtraction residuals.
 
 ### 12.4 Correlated noise
 
@@ -505,13 +568,13 @@ for science validation.
 
 ---
 
-## 13. GalSim integration study (reference)
+## 14. GalSim integration study (reference)
 
 The following sections document the GalSim capabilities surveyed during
 initial integration planning and remain relevant as a reference for future
 work.
 
-### 13.1 PSF profiles
+### 14.1 PSF profiles
 
 GalSim provides these PSF profile classes (all in `galsim.*`, all subclasses of
 `GSObject`):
@@ -527,7 +590,7 @@ GalSim provides these PSF profile classes (all in `galsim.*`, all subclasses of
 | `PhaseScreenPSF` | PSF from atmospheric + optical phase screens; time-evolving; the most physically realistic model |
 | `InterpolatedImage(image, ...)` | Arbitrary PSF from a data image (e.g., observed star stamp) |
 
-### 13.2 Rendering accuracy
+### 14.2 Rendering accuracy
 
 GalSim draws profiles via three methods, each with different tail behaviour:
 
@@ -549,12 +612,12 @@ gsp = galsim.GSParams(
 )
 ```
 
-### 13.3 Chromatic and sensor capabilities
+### 14.3 Chromatic and sensor capabilities
 
-See sections 12.2 and 12.3 above for the status of chromatic and sensor
+See sections 12 and 13 above for the status of chromatic and sensor
 effect implementation.
 
-### 13.4 Additional capabilities
+### 14.4 Additional capabilities
 
 | Feature | Details |
 |---------|---------|
@@ -568,7 +631,7 @@ effect implementation.
 
 ---
 
-## 14. Photon-shooting verification
+## 15. Photon-shooting verification
 
 A dedicated verification script (`examples/check_galsim_photon_shooting.py`)
 validates that GalSim photon shooting produces unbiased flux realisations

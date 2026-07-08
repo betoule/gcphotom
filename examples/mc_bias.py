@@ -136,6 +136,37 @@ def run(
         "--max-phot-sources",
         help="Max sources per batch for GalSim photon shooting.",
     ),
+    # Chromatic rendering (only with galsim-phot and method="phot")
+    chromatic: bool = typer.Option(
+        False,
+        "--chromatic",
+        help="Enable chromatic PSF + SED rendering (galsim-phot only).",
+    ),
+    bandpass: str = typer.Option(
+        "r",
+        "--bandpass",
+        help="Bandpass for chromatic mode: g, r, i, z.",
+    ),
+    sensor: bool = typer.Option(
+        False,
+        "--sensor",
+        help="Enable SiliconSensor (brighter-fatter + diffusion).",
+    ),
+    bf_strength: float = typer.Option(
+        0.0,
+        "--bf-strength",
+        help="Brighter-fatter strength (0=off, 1=LSST nominal).",
+    ),
+    diffusion_factor: float = typer.Option(
+        0.0,
+        "--diffusion-factor",
+        help="Charge diffusion factor (0=off, 1=LSST nominal).",
+    ),
+    zenith_angle: float = typer.Option(
+        30.0,
+        "--zenith-angle",
+        help="Zenith angle in degrees for atmospheric chromatic effects.",
+    ),
     n_pixels: int = typer.Option(
         5,
         "--n-pixels",
@@ -173,15 +204,6 @@ def run(
     ),
 ):
     """Run a Monte Carlo simulation (results saved to file by default)."""
-    if simulator == Simulator.astropy:
-        simulate_fn = gcp.simulate_image
-    elif simulator == Simulator.galsim_auto:
-        simulate_fn = partial(gcp.simulate_image_galsim, method="auto")
-    else:
-        simulate_fn = partial(
-            gcp.simulate_image_galsim, method="phot", max_phot_sources=max_phot_sources
-        )
-
     # Parse --n-sources: integer -> synthetic catalog, field name -> Gaia DR3
     gaia_field = None
     n_sources_int = None
@@ -196,6 +218,37 @@ def run(
                 f"'{n_sources}' is not a valid integer or known Gaia field name. "
                 f"Known fields: {', '.join(GAIA_FIELDS)}"
             ) from exc
+
+    if chromatic or sensor:
+        if simulator != Simulator.galsim_phot:
+            print(
+                "Warning: --chromatic/--sensor requires galsim-phot; "
+                "switching simulator."
+            )
+            simulator = Simulator.galsim_phot
+
+        simulate_fn = partial(
+            gcp.simulate_image_galsim,
+            method="phot",
+            max_phot_sources=max_phot_sources,
+            chromatic=chromatic,
+            bandpass=bandpass,
+            sensor=sensor,
+            bf_strength=bf_strength,
+            diffusion_factor=diffusion_factor,
+            zenith_angle=zenith_angle,
+        )
+    else:
+        if simulator == Simulator.astropy:
+            simulate_fn = gcp.simulate_image
+        elif simulator == Simulator.galsim_auto:
+            simulate_fn = partial(gcp.simulate_image_galsim, method="auto")
+        else:
+            simulate_fn = partial(
+                gcp.simulate_image_galsim,
+                method="phot",
+                max_phot_sources=max_phot_sources,
+            )
 
     print(f"Simulator backend: {simulator.value}")
 

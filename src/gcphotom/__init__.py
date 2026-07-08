@@ -16,6 +16,12 @@ from gcphotom.simulator import (
     simulate_image,
     make_test_source_catalog,
 )
+from gcphotom.chromatic import (
+    build_chromatic_psf,
+    build_sensor,
+    sed_from_color,
+    tophat_bandpass,
+)
 from gcphotom.galsim_simulator import simulate_image_galsim
 from gcphotom.gaia_catalog import make_gaia_source_catalog
 
@@ -37,4 +43,8 @@ __all__ = [
     "match",
     "simulate_image",
     "simulate_image_galsim",
+    "build_chromatic_psf",
+    "build_sensor",
+    "sed_from_color",
+    "tophat_bandpass",
 ]
