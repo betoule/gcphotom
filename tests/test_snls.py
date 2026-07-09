@@ -337,7 +337,7 @@ class TestCLI:
 
     def test_snls_process_no_match(self, tmp_path):
         ref = _make_ref_catalog(n_ref=2)
-        ref["star"] = [False, False]
+        ref["star_g"] = [False, False]
         ref_path = tmp_path / "ref.npy"
         np.save(str(ref_path), ref)
         cat, _ = _make_forced_catalog(n_src=5, rng=np.random.default_rng(42))
@@ -360,7 +360,7 @@ class TestCLI:
 
     def test_snls_match_shows_counts(self, tmp_path):
         ref = _make_ref_catalog(n_ref=2)
-        ref["star"] = [True, True]
+        ref["star_g"] = [True, True]
         ref["flux_g"] = [20000, 20000]
         ref_path = tmp_path / "ref.npy"
         np.save(str(ref_path), ref)
@@ -382,6 +382,36 @@ class TestCLI:
         assert result.exit_code == 0
         assert "Total" in result.stdout
         assert "Matched" in result.stdout
+
+    def test_snls_match_dump(self, tmp_path):
+        ref = _make_ref_catalog(n_ref=2)
+        ref["star_g"] = [True, True]
+        ref["flux_g"] = [20000, 20000]
+        ref_path = tmp_path / "ref.npy"
+        np.save(str(ref_path), ref)
+        cat, _ = _make_forced_catalog(n_src=5)
+        cat["bindex"] = [0, 0, 0, 0, 0]
+        cat_path = tmp_path / "cat.npy"
+        np.save(str(cat_path), cat)
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "snls",
+                "match",
+                str(cat_path),
+                "--reference",
+                str(ref_path),
+                "--dump",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "100.0%" in result.stdout
+        out_path = tmp_path / "cat_matched.npy"
+        assert out_path.exists()
+        dumped = np.load(str(out_path))
+        assert len(dumped) == 5
+        np.testing.assert_array_equal(cat["bindex"], dumped["bindex"])
 
     def test_snls_process_glob_no_match(self, tmp_path):
         """Glob pattern that matches nothing should exit with error."""

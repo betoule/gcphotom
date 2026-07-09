@@ -1,5 +1,6 @@
 import glob as glob_module
 from pathlib import Path
+from typing import List
 
 import numpy as np
 import typer
@@ -20,18 +21,20 @@ app.add_typer(snls_app, name="snls")
 console = Console()
 
 
-def _expand_glob(pattern):
-    files = sorted(glob_module.glob(pattern))
+def _expand_glob(patterns):
+    files = []
+    for pattern in patterns:
+        files.extend(sorted(glob_module.glob(pattern)))
     if not files:
-        console.print(f"[red]No files matching:[/red] {pattern}")
+        console.print(f"[red]No files matching:[/red] {patterns}")
         raise typer.Exit(1)
     return files
 
 
 @snls_app.command()
 def process(
-    catalog: str = typer.Argument(
-        ..., help="Glob pattern or path to forced photometry catalog(s)."
+    catalog: List[str] = typer.Argument(
+        ..., help="Glob pattern(s) or path(s) to forced photometry catalog(s)."
     ),
     reference: Path = typer.Option(
         ..., "--reference", "-r", help="Reference catalog (.npy)."
@@ -89,8 +92,8 @@ def process(
 
 @snls_app.command()
 def match(
-    catalog: str = typer.Argument(
-        ..., help="Glob pattern or path to forced photometry catalog(s)."
+    catalog: List[str] = typer.Argument(
+        ..., help="Glob pattern(s) or path(s) to forced photometry catalog(s)."
     ),
     reference: Path = typer.Option(
         ..., "--reference", "-r", help="Reference catalog (.npy)."
@@ -100,6 +103,12 @@ def match(
     ),
     min_flux: float = typer.Option(
         10000.0, "--min-flux", help="Minimum reference flux for star selection."
+    ),
+    dump: bool = typer.Option(
+        False,
+        "--dump",
+        "-d",
+        help="Save matched catalogs as '<input_stem>_matched.npy'.",
     ),
 ):
     """Show matching statistics between forced catalogs and a reference catalog."""
@@ -116,3 +125,11 @@ def match(
         n_matched = int(mask.sum())
         frac = f"{n_matched / n_total:.1%}" if n_total > 0 else "N/A"
         console.print(f"{Path(fname).name:60s} {n_total:8d} {n_matched:8d} {frac:>8s}")
+
+        if dump:
+            cat_path = Path(fname)
+            out_path = cat_path.with_name(f"{cat_path.stem}_matched.npy")
+            np.save(str(out_path), cat[mask])
+            console.print(
+                f"  -> saved [cyan]{out_path.name}[/cyan] ({n_matched} sources)"
+            )
