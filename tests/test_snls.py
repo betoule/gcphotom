@@ -413,6 +413,36 @@ class TestCLI:
         assert len(dumped) == 5
         np.testing.assert_array_equal(cat["bindex"], dumped["bindex"])
 
+    def test_snls_match_dump_dir(self, tmp_path):
+        ref = _make_ref_catalog(n_ref=2)
+        ref["star_g"] = [True, True]
+        ref["flux_g"] = [20000, 20000]
+        ref_path = tmp_path / "ref.npy"
+        np.save(str(ref_path), ref)
+        cat, _ = _make_forced_catalog(n_src=5)
+        cat["bindex"] = [0, 0, 0, 0, 0]
+        cat_path = tmp_path / "cat.npy"
+        np.save(str(cat_path), cat)
+        out_dir = tmp_path / "output"
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "snls",
+                "match",
+                str(cat_path),
+                "--reference",
+                str(ref_path),
+                "--dump-dir",
+                str(out_dir),
+            ],
+        )
+        assert result.exit_code == 0
+        out_path = out_dir / "cat_matched.npy"
+        assert out_path.exists()
+        dumped = np.load(str(out_path))
+        assert len(dumped) == 5
+
     def test_snls_process_glob_no_match(self, tmp_path):
         """Glob pattern that matches nothing should exit with error."""
         runner = CliRunner()

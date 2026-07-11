@@ -1,6 +1,6 @@
 import glob as glob_module
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import typer
@@ -110,10 +110,16 @@ def match(
         "-d",
         help="Save matched catalogs as '<input_stem>_matched.npy'.",
     ),
+    dump_dir: Optional[Path] = typer.Option(
+        None,
+        "--dump-dir",
+        help="Output directory for matched catalogs (implies --dump).",
+    ),
 ):
     """Show matching statistics between forced catalogs and a reference catalog."""
     ref_cat = np.load(reference)
     fnames = _expand_glob(catalog)
+    dump_active = dump or dump_dir is not None
 
     console.print(f"{'File':60s} {'Total':>8s} {'Matched':>8s} {'Frac':>8s}")
     console.print("-" * 84)
@@ -126,9 +132,13 @@ def match(
         frac = f"{n_matched / n_total:.1%}" if n_total > 0 else "N/A"
         console.print(f"{Path(fname).name:60s} {n_total:8d} {n_matched:8d} {frac:>8s}")
 
-        if dump:
+        if dump_active:
             cat_path = Path(fname)
-            out_path = cat_path.with_name(f"{cat_path.stem}_matched.npy")
+            if dump_dir is not None:
+                dump_dir.mkdir(parents=True, exist_ok=True)
+                out_path = dump_dir / f"{cat_path.stem}_matched.npy"
+            else:
+                out_path = cat_path.with_name(f"{cat_path.stem}_matched.npy")
             np.save(str(out_path), cat[mask])
             console.print(
                 f"  -> saved [cyan]{out_path.name}[/cyan] ({n_matched} sources)"
